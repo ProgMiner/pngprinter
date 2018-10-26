@@ -55,7 +55,10 @@ function PNG_check_sign() {
     return 1
 }
 
-# Reads chunk
+# Reads chunk and pronts it in following format:
+#   [0] - chunk data length
+#   [1] - chunk type
+#   [2-] - chunk data bytes
 #
 # @ - int[12] - array of bytes
 function PNG_read_chunk() {
@@ -68,14 +71,12 @@ function PNG_read_chunk() {
         exit
     fi
 
-    local type=
-    for b in "${input[@]:4:4}" ; do
+    local type=("${input[@]:4:4}")
+    for b in $type ; do
         if (( ($b < 65 || $b > 90) && ($b < 97 || $b > 122) )) ; then
             echo 'Bad chunk type' >&2
             exit
         fi
-
-        type="$type$(chr $b)"
     done
 
     input=("${input[@]:8}")
@@ -83,7 +84,7 @@ function PNG_read_chunk() {
 
     # TODO CRC check
 
-    echo "$length $type ${data[@]}"
+    echo "$length $(chr_array "${type[@]}") ${data[@]}"
 }
 
 # Entry point
@@ -114,5 +115,16 @@ if PNG_check_sign "${input[@]}" ; then
 fi
 
 input=("${input[@]:8}")
+image=()
 
-PNG_read_chunk "${input[@]}"
+# IHDR
+chunk=($(PNG_read_chunk "${input[@]}"))
+
+if [[ ${chunk[1]} != 'IHDR' ]] || [[ ${chunk[0]} -ne 13 ]] ; then
+    echo 'Bad IHDR chunk' >&2
+    exit
+fi
+
+echo "${chunk[@]}"
+
+input=("${input[@]:25}")
