@@ -56,8 +56,8 @@ function PNG_check_sign() {
 }
 
 # Reads chunk and pronts it in following format:
-#   [0] - chunk data length
-#   [1] - chunk type
+#   [0]  - chunk data length
+#   [1]  - chunk type
 #   [2-] - chunk data bytes
 #
 # @ - int[12] - array of bytes
@@ -85,6 +85,20 @@ function PNG_read_chunk() {
     # TODO CRC check
 
     echo "$length $(chr_array "${type[@]}") ${data[@]}"
+}
+
+# Prints bytes array without chunk
+#
+# Prints bytes array starting at
+# specified chunk length + 12 bytes
+#
+# 1   - int   - chunk length
+# @:1 - int[] - bytes array
+function PNG_skip_chunk() {
+    local input=("${@:1}")
+    local length=$(( $1 + 13 ))
+
+    echo "${input[@]:$length}"
 }
 
 # Entry point
@@ -125,6 +139,15 @@ if [[ ${chunk[1]} != 'IHDR' ]] || [[ ${chunk[0]} -ne 13 ]] ; then
     exit
 fi
 
-echo "${chunk[@]}"
+image=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
 
-input=("${input[@]:25}")
+printf 'Image size: %dx%d
+Bit depth: %d
+Colour type: %d
+Compression method: %d
+Filter method: %d
+Interlace method: %d\n' "${image[@]}"
+
+input=($(PNG_skip_chunk 13 "${input[@]}"))
+
+#
