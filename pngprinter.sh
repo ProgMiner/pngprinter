@@ -39,6 +39,21 @@ function bytes2uint() {
     echo $ret
 }
 
+# Checks is array contains a value
+#
+# 1   - Value
+# @:2 - Array
+function array_contains() {
+    local input=("${@:2}")
+    local value="$1"
+
+    for elem in "${input[@]}" ; do
+        [[ $value == $elem ]] && return 0
+    done
+
+    return 1
+}
+
 ## PNG
 
 # Checks is bytes is a PNG image
@@ -49,10 +64,10 @@ function PNG_check_sign() {
     local input=("$@")
 
     for ((i=0; $i < ${#sign[@]}; ++i)) ; do
-        [[ ${input[$i]} -ne ${sign[$i]} ]] && return 0
+        [[ ${input[$i]} -ne ${sign[$i]} ]] && return 1
     done
 
-    return 1
+    return 0
 }
 
 # Reads chunk and pronts it in following format:
@@ -93,12 +108,43 @@ function PNG_read_chunk() {
 # specified chunk length + 12 bytes
 #
 # 1   - int   - chunk length
-# @:1 - int[] - bytes array
+# @:2 - int[] - bytes array
 function PNG_skip_chunk() {
-    local input=("${@:1}")
-    local length=$(( $1 + 13 ))
+    local input=("${@:2}")
+    local length=$(( $1 + 12 ))
 
     echo "${input[@]:$length}"
+}
+
+# Prints formatted tIME content
+#
+# @ - int[] - bytes array
+function PNG_format_time() {
+    local input=("$@")
+
+    local time=($(bytes2uint 0 0 "${input[@]}") "${input[@]:2}")
+    printf '%02d-%02d-%02d %02d:%02d:%02d' "${time[@]}"
+}
+
+# Prints formatted tEXt content
+#
+# @ - int[] - bytes array
+function PNG_format_text() {
+    local input=("$@")
+
+    local keyword=
+    for c in "${input[@]}" ; do
+        [[ $c -eq 0 ]] && break
+
+        keyword="${keyword[@]}$(chr $c)"
+    done
+
+    local kw_length=${#keyword}
+    if [[ $kw_length -gt 79 ]] ; then
+        echo 'Bad tEXt chunk' >&2
+    fi
+
+    printf '%s: %s' "$keyword" "$(chr_array "${input[@]:$(( $kw_length + 1 ))}" | cat -vt)"
 }
 
 # Entry point
@@ -123,31 +169,113 @@ BEGIN {
 }
 '))
 
-if PNG_check_sign "${input[@]}" ; then
+if ! PNG_check_sign "${input[@]}" ; then
     echo 'File is not PNG image!' >&2
     exit
 fi
 
 input=("${input[@]:8}")
-image=()
 
-# IHDR
-chunk=($(PNG_read_chunk "${input[@]}"))
+# Image array format:
+#   - 0 - Width
+#   - 1 - Height
+#   - 2 - Bit depth
+#   - 3 - Colour type
+#   - 4 - Compression method
+#   - 5 - Filter method
+#   - 6 - Interlace method
+header=()
 
-if [[ ${chunk[1]} != 'IHDR' ]] || [[ ${chunk[0]} -ne 13 ]] ; then
-    echo 'Bad IHDR chunk' >&2
-    exit
-fi
+# Array with readed chunks
+chunks=()
 
-image=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
+while true ; do
+    if [[ ${#input[@]} -eq 0 ]] ; then
+        echo 'Missing IEND chunk' >&2
+        exit
+    fi
 
-printf 'Image size: %dx%d
+    chunk=($(PNG_read_chunk "${input[@]}"))
+
+    if [[ ${#chunks[@]} -eq 0 ]] && [[ ${chunk[1]} != 'IHDR' ]] ; then
+        echo 'Missing IHDR chunk' >&2
+        exit
+    fi
+
+    case "${chunk[1]}" in
+
+    # Critical chunks
+    'IHDR' )
+        if [[ ${chunk[0]} -ne 13 ]] ; then
+            echo 'Bad IHDR chunk' >&2
+            exit
+        fi
+
+        header=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
+
+        printf 'Image size: %dx%dpx
 Bit depth: %d
 Colour type: %d
 Compression method: %d
 Filter method: %d
-Interlace method: %d\n' "${image[@]}"
+Interlace method: %d\n' "${header[@]}"
+        ;;
+    'PLTE' )
+        ;;
+    'IDAT' )
+        ;;
+    'IEND' )
+        if [[ ${chunk[0]} -ne 0 ]] ; then
+            echo 'Bad IEND chunk' >&2
+            exit
+        fi
 
-input=($(PNG_skip_chunk 13 "${input[@]}"))
+        break
+        ;;
 
-#
+    # Ancillary chunks
+    'cHRM' )
+        ;;
+    'gAMA' )
+        ;;
+    'iCCP' )
+        ;;
+    'sBIT' )
+        ;;
+    'sRGB' )
+        ;;
+    'bKGD' )
+        ;;
+    'hIST' )
+        ;;
+    'tRNS' )
+        ;;
+    'pHYs' )
+        ;;
+    'sPLT' )
+        ;;
+    'tIME' )
+        if array_contains 'tIME' "${chunks[@]}" ; then
+            echo 'tIME chunks cannot be more than one' >&2
+            exit
+        fi
+
+        echo 'Image last edit time:' "$(PNG_format_time ${chunk[@]:2})"
+        ;;
+    'iTXt' )
+        # TODO
+        ;;
+    'tEXt' )
+        echo "$(PNG_format_text ${chunk[@]:2})"
+        ;;
+    'zTXt' )
+        # TODO
+        ;;
+    esac
+
+    printf 'Chunk %s length %d: ' ${chunk[1]} ${chunk[0]}
+    echo "${chunk[@]:2}"
+
+    input=($(PNG_skip_chunk ${chunk[0]} "${input[@]}"))
+    chunks=("${chunks[@]}" "${chunk[1]}")
+done
