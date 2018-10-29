@@ -64,6 +64,21 @@ function rgb2ascii() {
     echo 7
 }
 
+# Reads data from stream and prints bytes array
+function read_bytes() {
+    echo "$( xxd -p -c 1 | nawk '
+BEGIN {
+    for (i = 0; i < 256; ++i) {
+        hex2dec[sprintf("%02x", i)] = i
+    }
+}
+
+{
+    print hex2dec[$0]
+}
+')"
+}
+
 ## PNG
 
 # Checks is bytes is a PNG image
@@ -80,10 +95,10 @@ function PNG_check_sign() {
     return 0
 }
 
-# Reads chunk and pronts it in following format:
+# Reads chunk and prints it in following format:
 #   [0]  - chunk data length
 #   [1]  - chunk type
-#   [2-] - chunk data bytes
+#   [2:] - chunk data bytes
 #
 # @ - int[12] - array of bytes
 function PNG_read_chunk() {
@@ -126,6 +141,18 @@ function PNG_skip_chunk() {
     echo "${input[@]:$length}"
 }
 
+# Uncompresses data
+#
+# 1 -   int   - compression method
+# @:2 - int[] - compressed bytes array
+function PNG_uncompress() {
+    if [[ "$1" -ne 0 ]] ; then
+        echo "Undefined compression method $1" >&2
+    fi
+
+    chr_array "${@:2}" | gzip -cd - | read_bytes
+}
+
 # Prints formatted tIME content
 #
 # @ - int[] - bytes array
@@ -138,23 +165,123 @@ function PNG_format_time() {
 
 # Prints formatted tEXt content
 #
+# Printing format:
+#   <Keyword>: <Text>
+#
 # @ - int[] - bytes array
 function PNG_format_text() {
     local input=("$@")
 
+    local i=0
     local keyword=
-    for c in "${input[@]}" ; do
-        [[ $c -eq 0 ]] && break
+    for ((; $i < "${#input[@]}"; ++i)) ; do
+        [[ "${input[$i]}" -eq 0 ]] && break
 
-        keyword="${keyword[@]}$(chr $c)"
+        keyword="$keyword$(chr "${input[$i]}")"
     done
 
-    local kw_length=${#keyword}
-    if [[ $kw_length -gt 79 ]] ; then
+    if [[ "$i" -lt 1 ]] || [[ "$i" -gt 79 ]] ; then
         echo 'Bad tEXt chunk' >&2
     fi
 
-    printf '%s: %s' "$keyword" "$(chr_array "${input[@]:$(( $kw_length + 1 ))}" | cat -vt)"
+    printf '%s: %s' "$keyword" "$(chr_array "${input[@]:$(( $i + 1 ))}" | cat -vt)"
+}
+
+# Prints formatted zTXt content
+#
+# Printing format:
+#   <Keyword>: <Text>
+#
+# @ - int[] - bytes array
+function PNG_format_compressed_text() {
+    local input=("$@")
+
+    local i=0
+    local keyword=
+    for ((; $i < "${#input[@]}"; ++i)) ; do
+        [[ "${input[$i]}" -eq 0 ]] && break
+
+        keyword="$keyword$(chr "${input[$i]}")"
+    done
+
+    if [[ "$i" -lt 1 ]] || [[ "$i" -gt 79 ]] ; then
+        echo 'Bad zTXt chunk' >&2
+    fi
+
+    ((++i))
+    printf '%s: %s' "$keyword" "$(chr_array "$(PNG_uncompress "${input[@]:$i}")" | cat -vt)"
+}
+
+# Prints formatted iTXt content
+#
+# Printing format:
+#   <Keyword> (<Language> - <Translated keyword>): <Text>
+# or if Language or Translated keyword is not presented:
+#   <Keyword> (<Language/Translated keyword>: <Text>
+# or if Language and Translated keyword is not presented:
+#   <Keyword>: <Text>
+#
+# @ - int[] - bytes array
+function PNG_format_international_text() {
+    local input=("$@")
+
+    local i=0
+    local keyword=
+    for ((; $i < "${#input[@]}"; ++i)) ; do
+        [[ "${input[$i]}" -eq 0 ]] && break
+
+        keyword="$keyword$(chr "${input[$i]}")"
+    done
+
+    if [[ "$i" -lt 1 ]] || [[ "$i" -gt 79 ]] ; then
+        echo 'Bad iTXt chunk' >&2
+    fi
+
+    ((++i))
+    local compression="${input[$i]}"
+
+    ((++i))
+    local method="${input[$i]}"
+
+    ((++i))
+    local lang=
+    for ((; $i < "${#input[@]}"; ++i)) ; do
+        [[ "${input[$i]}" -eq 0 ]] && break
+
+        lang="$lang$(chr "${input[$i]}")"
+    done
+
+    ((++i))
+    local trans_keyword=
+    for ((; $i < "${#input[@]}"; ++i)) ; do
+        [[ "${input[$i]}" -eq 0 ]] && break
+
+        trans_keyword=("${trans_keyword[@]}" "${input[$i]}")
+    done
+
+    ((++i))
+    local text=("${input[@]:$i}")
+
+    if [[ "$compression" -ne 0 ]] ; then
+        text="$(PNG_uncompress "$method" "${text[@]}")"
+    fi
+
+    text=$(chr_array "${text[@]}" | cat -vt)
+
+    case "${#lang}${#trans_keyword}" in
+    '00' )
+        printf '%s: %s' "$keyword" "$text"
+        ;;
+    '0*' )
+        printf '%s (%s): %s' "$keyword" "$trans_keyword" "$text"
+        ;;
+    '*0' )
+        printf '%s (%s): %s' "$keyword" "$lang" "$text"
+        ;;
+    '*' )
+        printf '%s (%s - %s): %s' "$keyword" "$lang" "$trans_keyword" "$text"
+        ;;
+    esac
 }
 
 # Entry point
@@ -167,17 +294,7 @@ if ! type nawk &> /dev/null ; then
     }
 fi
 
-input=($( xxd -p -c 1 | nawk '
-BEGIN {
-    for (i = 0; i < 256; ++i) {
-        hex2dec[sprintf("%02x", i)] = i
-    }
-}
-
-{
-    print hex2dec[$0]
-}
-'))
+input=($(read_bytes))
 
 if ! PNG_check_sign "${input[@]}" ; then
     echo 'File is not PNG image!' >&2
@@ -395,13 +512,13 @@ Interlace method: %d\n' "${header[@]}"
         echo 'Image last edit time:' "$(PNG_format_time ${chunk[@]:2})"
         ;;
     'iTXt' )
-        # TODO
+        echo "$(PNG_format_international_text "${chunk[@]:2}")"
         ;;
     'tEXt' )
-        echo "$(PNG_format_text ${chunk[@]:2})"
+        echo "$(PNG_format_text "${chunk[@]:2}")"
         ;;
     'zTXt' )
-        # TODO
+        echo "$(PNG_compressed_text "${chunk[@]:2}")"
         ;;
     esac
 
