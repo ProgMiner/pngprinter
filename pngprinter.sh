@@ -150,9 +150,7 @@ function PNG_uncompress() {
         echo "Undefined compression method $1" >&2
     fi
 
-    chr_array 31 139 8 0 0 0 0 0 0 0 "${@:2}" > mmmmmmm
-
-    chr_array 31 139 8 0 0 0 0 0 0 0 "${@:2}" | gzip -cd | read_bytes
+    chr_array "${@:2}" | openssl zlib -d | read_bytes
 }
 
 # Prints formatted tIME content
@@ -440,4 +438,6 @@ Interlace method: %d\n' "${header[@]}"
     chunks=("${chunks[@]}" "${chunk[1]}")
 done
 
-data=$(PNG_uncompress "${header[4]}" "${data[@]}")
+data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
+
+echo Uncompressed data: "${data[@]}"
