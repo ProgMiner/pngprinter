@@ -150,7 +150,9 @@ function PNG_uncompress() {
         echo "Undefined compression method $1" >&2
     fi
 
-    chr_array "${@:2}" | gzip -cd - | read_bytes
+    chr_array 31 139 8 0 0 0 0 0 0 0 "${@:2}" > mmmmmmm
+
+    chr_array 31 139 8 0 0 0 0 0 0 0 "${@:2}" | gzip -cd | read_bytes
 }
 
 # Prints formatted tIME content
@@ -296,6 +298,8 @@ fi
 
 input=($(read_bytes))
 
+echo "${input[@]}"
+
 if ! PNG_check_sign "${input[@]}" ; then
     echo 'File is not PNG image!' >&2
     exit
@@ -435,3 +439,5 @@ Interlace method: %d\n' "${header[@]}"
     input=($(PNG_skip_chunk ${chunk[0]} "${input[@]}"))
     chunks=("${chunks[@]}" "${chunk[1]}")
 done
+
+data=$(PNG_uncompress "${header[4]}" "${data[@]}")
