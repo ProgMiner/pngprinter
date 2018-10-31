@@ -336,8 +336,7 @@ while true ; do
         exit
     fi
 
-    printf 'Chunk %s length %d: ' ${chunk[1]} ${chunk[0]}
-    echo "${chunk[@]:2}"
+    printf 'Chunk %s length %d: %s\n' "${chunk[1]}" "${chunk[0]}" "${chunk[*]:2}" >&2
 
     case "${chunk[1]}" in
 
@@ -349,6 +348,15 @@ while true ; do
         fi
 
         header=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
+
+        if (( ${header[0]} == 0 || ${header[1]} == 0 )) ||
+            ! array_contains "${header[2]}" 1 2 4 8 16 ||
+            ! array_contains "${header[3]}" 0 2 3 4 6 ||
+            [[ "${header[5]}" -ne 0 ]] ||
+            ! array_contains "${header[6]}" 0 1 ; then
+            echo 'Bad IHDR chunk' >&2
+            exit
+        fi
 
         printf 'Image size: %dx%dpx
 Bit depth: %d
@@ -399,110 +407,7 @@ Interlace method: %d\n' "${header[@]}"
         break
         ;;
 
-    # Ancillary chunks
-    'cHRM' )
-        if array_contains 'PLTE' "${chunks[@]}" || array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'gAMA must be before PLTE and IDAT chunks' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: cHRM chunk is not supported' >&2
-        ;;
-    'gAMA' )
-        if array_contains 'PLTE' "${chunks[@]}" || array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'gAMA must be before PLTE and IDAT chunks' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: gAMA chunk is not supported' >&2
-        ;;
-    'iCCP' )
-        if array_contains 'PLTE' "${chunks[@]}" || array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'iCCP must be before PLTE and IDAT chunks' >&2
-            exit
-        fi
-
-        if array_contains 'sRGB' "${chunks[@]}" ; then
-            echo 'iCCP and sRGB cannot be together' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: iCCP chunk is not supported' >&2
-        ;;
-    'sBIT' )
-        if array_contains 'PLTE' "${chunks[@]}" || array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'sBIT must be before PLTE and IDAT chunks' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: sBIT chunk is not supported' >&2
-        ;;
-    'sRGB' )
-        if array_contains 'PLTE' "${chunks[@]}" || array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'sRGB must be before PLTE and IDAT chunks' >&2
-            exit
-        fi
-
-        if array_contains 'iCCP' "${chunks[@]}" ; then
-            echo 'iCCP and sRGB cannot be together' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: sRGB chunk is not supported' >&2
-        ;;
-    'bKGD' )
-        if array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'bKGD must be before IDAT chunk' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'bKGD chunk is ignored' >&2
-        ;;
-    'hIST' )
-        if array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'hIST must be before IDAT chunk' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: hIST chunk is not supported' >&2
-        ;;
-    'tRNS' )
-        if array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'tRNS must be before IDAT chunk' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: tRNS chunk is not supported' >&2
-        ;;
-    'pHYs' )
-        if array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'pHYs must be before IDAT chunk' >&2
-            exit
-        fi
-
-        x=$(bytes2uint "${chunk[@]:2}")
-        y=$(bytes2uint "${chunk[@]:6}")
-        if [[ $x -ne $y ]] ; then
-            echo "Pixels aspect ratio is $x / $y but not supported" >&2
-        fi
-        ;;
-    'sPLT' )
-        if array_contains 'IDAT' "${chunks[@]}" ; then
-            echo 'sPLT must be before IDAT chunk' >&2
-            exit
-        fi
-
-        # TODO
-        echo 'Warning: sPLT chunk is not supported' >&2
-        ;;
+    # Other chunks
     'tIME' )
         if array_contains 'tIME' "${chunks[@]}" ; then
             echo 'tIME chunks cannot be more than one' >&2
@@ -519,6 +424,11 @@ Interlace method: %d\n' "${header[@]}"
         ;;
     'zTXt' )
         echo "$(PNG_compressed_text "${chunk[@]:2}")"
+        ;;
+
+    # Ignored chunks
+    * )
+        echo "Chunk ${chunk[1]} ignored" >&2
         ;;
     esac
 
