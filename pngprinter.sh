@@ -312,6 +312,18 @@ function PNG_format_international_text() {
     esac
 }
 
+# Reconstructs PNG image from filtered
+#
+# @:1:7 - int   - Image header
+# @:8   - int[] - uncompressed PNG image bytes array
+function PNG_reconstruct() {
+    local header=("${@:1:7}")
+    local input=("${@:8}")
+
+    echo Header: "${header[@]}"
+    echo Image: "${input[@]}"
+}
+
 # Entry point
 
 if ! type nawk &> /dev/null ; then
@@ -341,7 +353,6 @@ input=("${input[@]:8}")
 #   - 4 - Compression method
 #   - 5 - Filter method
 #   - 6 - Interlace method
-#   - 7 - Gamma
 header=()
 
 # Palette. Array with colors or empty if not used
@@ -468,4 +479,4 @@ done
 
 data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
 
-echo Uncompressed data: "${data[@]}"
+PNG_reconstruct "${header[@]}" "${data[@]}"
