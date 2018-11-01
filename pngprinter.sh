@@ -5,7 +5,7 @@
 ## Requirements:
 # - bash
 # - awk | nawk
-# - openssl with zlib | python2 with zlib
+# - python2 with zlib
 
 ## License:
 
@@ -120,17 +120,15 @@ BEGIN {
 
 # Inflates deflated stream in zlib format
 function zlib_uncompress() {
-    if ! openssl zlib -d 2> /dev/null ; then
-        if ! type python2 &> /dev/null ; then
-            # alias python2=python
+    if ! type python2 &> /dev/null ; then
+        # alias python2=python
 
-            function python2() {
-                python "$@"
-            }
-        fi
-
-        python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
+        function python2() {
+            python "$@"
+        }
     fi
+
+    python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
 }
 
 ## PNG
