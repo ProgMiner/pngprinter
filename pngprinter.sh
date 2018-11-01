@@ -2,7 +2,10 @@
 
 # Bash script for displaying PNG images on terminal
 
-## Requirements: bash, awk, openssl
+## Requirements:
+# - bash
+# - awk | nawk
+# - openssl with zlib | python2 with zlib
 
 ## License:
 
@@ -94,6 +97,14 @@ function rgb2ascii() {
 
 # Reads data from stream and prints bytes array
 function read_bytes() {
+    if ! type nawk &> /dev/null ; then
+        # alias nawk=awk
+
+        function nawk() {
+            awk "$@"
+        }
+    fi
+
     echo "$( xxd -p -c 1 | nawk '
 BEGIN {
     for (i = 0; i < 256; ++i) {
@@ -105,6 +116,21 @@ BEGIN {
     print hex2dec[$0]
 }
 ')"
+}
+
+# Inflates deflated stream in zlib format
+function zlib_uncompress() {
+    if ! openssl zlib -d 2> /dev/null ; then
+        if ! type python2 &> /dev/null ; then
+            # alias python2=python
+
+            function python2() {
+                python "$@"
+            }
+        fi
+
+        python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
+    fi
 }
 
 ## PNG
@@ -178,9 +204,7 @@ function PNG_uncompress() {
         echo "Undefined compression method $1" >&2
     fi
 
-    if ! chr_array "${@:2}" | openssl zlib -d 2> /dev/null | read_bytes ; then
-        chr_array "${@:2}" | python -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))" | read_bytes
-    fi
+    chr_array "${@:2}" | zlib_uncompress | read_bytes
 }
 
 # Prints formatted tIME content
@@ -333,7 +357,7 @@ function PNG_get_parts_sizes() {
         echo 0 #7
         # TODO
 
-        echo "Interlace method 0 is not supported" >&2
+        echo 'Interlace method 0 is not supported' >&2
         exit
         ;;
     '*' )
@@ -436,14 +460,6 @@ function PNG_reconstruct() {
 }
 
 # Entry point
-
-if ! type nawk &> /dev/null ; then
-    # alias nawk=awk
-
-    function nawk() {
-        awk "$@"
-    }
-fi
 
 input=($(read_bytes))
 
