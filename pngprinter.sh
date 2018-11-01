@@ -69,8 +69,8 @@ function bytes2uint() {
 
 # Checks is array contains a value
 #
-# 1   - Value
-# @:2 - Array
+# 1   - value
+# @:2 - array
 function array_contains() {
     local input=("${@:2}")
     local value="$1"
@@ -178,7 +178,9 @@ function PNG_uncompress() {
         echo "Undefined compression method $1" >&2
     fi
 
-    chr_array "${@:2}" | openssl zlib -d | read_bytes
+    if ! chr_array "${@:2}" | openssl zlib -d 2> /dev/null | read_bytes ; then
+        chr_array "${@:2}" | python -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))" | read_bytes
+    fi
 }
 
 # Prints formatted tIME content
@@ -312,16 +314,125 @@ function PNG_format_international_text() {
     esac
 }
 
+# Prints widths and heights of parts of image
+#
+# Printing format:
+#   First line: <parts count>
+#   Other lines: <part width> <part height>
+#
+# @ - int[7] - image header
+function PNG_get_parts_sizes() {
+    local header=("$@")
+
+    case "${header[6]}" in
+    '0' )
+        echo 1
+        echo "${header[0]}" "${header[1]}"
+        ;;
+    '1' )
+        echo 0 #7
+        # TODO
+
+        echo "Interlace method 0 is not supported" >&2
+        exit
+        ;;
+    '*' )
+        echo "Unknown interlace method ${header[6]}" >&2
+        exit
+    esac
+}
+
 # Reconstructs PNG image from filtered
 #
-# @:1:7 - int   - Image header
-# @:8   - int[] - uncompressed PNG image bytes array
+# @:1:7          - int[7]  - image header
+# 8              - int     - scanlines count
+# @:9:$2         - int[$2] - scanlines widths
+# @:$(($2 + 10)) - int[]   - uncompressed PNG image bytes array
 function PNG_reconstruct() {
     local header=("${@:1:7}")
-    local input=("${@:8}")
+    local count="$8"
+    local widths=("${@:9:$2}")
+    local input=("${@:$(($2 + 9))}")
 
-    echo Header: "${header[@]}"
-    echo Image: "${input[@]}"
+    if [[ "${header[5]}" -ne 0 ]] ; then
+        echo "Unknown filter method ${header[5]}" >&2
+        exit
+    fi
+
+    local pixel_size=1
+    if (( "${header[3]}" == 0 && "${header[2]}" == 16 )) ; then
+        pixel_size=2
+    elif array_contains "${header[3]}" 2 4 6 ; then
+        pixel_size=$(("${header[2]}" / 8))
+
+        if [[ "${header[3]}" -eq 2 ]] ; then
+            (( pixel_size *= 3 ))
+        else
+            (( pixel_size *= 4 ))
+        fi
+    fi
+
+    local result=()
+    local type=
+    local line=()
+    local cur_line=()
+    local prev_line=()
+    for ((i=0; $i < "$count"; ++i)); do
+        if [[ ${widths[$i]} -eq 0 ]] ; then
+            continue
+        fi
+
+        cur_line=()
+        type="${input[0]}"
+        line=("${input[@]:1:$((${widths[$i]} * $pixel_size))}")
+        input=("${input[@]:$((${widths[$i]} * $pixel_size + 1))}")
+
+        for ((x=0; $x < $(("${widths[$i]}" * $pixel_size)); )); do
+            for ((cx=0; $cx < "$pixel_size"; ++cx)); do
+                case "$type" in
+                0 )
+                    cur_line=("${cur_line[@]}" "${line[$x]}")
+                    ;;
+                1 )
+                    if [[ $x -lt $pixel_size ]] ; then
+                        cur_line=("${cur_line[@]}" "${line[$x]}")
+                    else
+                        cur_line=("${cur_line[@]}" $((("${line[$x]}" + "${cur_line[$(($x - $pixel_size))]}") % 256)))
+                    fi
+                    ;;
+                2 )
+                    cur_line=("${cur_line[@]}" $((("${line[$x]}" + "${prev_line[$x]}") % 256)))
+                    ;;
+                3 )
+                    if [[ $x -lt $pixel_size ]] ; then
+                        cur_line=("${cur_line[@]}" "${line[$x]}")
+                    else
+                        cur_line=("${cur_line[@]}" $((("${line[$x]}" + "${prev_line[$(($x - $pixel_size))]}") % 256)))
+                    fi
+                    ;;
+                4 )
+                    # TODO
+                    echo 'Paeth filter type is unsupported' >&2
+                    exit
+                    ;;
+                * )
+                    echo "Unknown filter type $type" >&2
+                    exit
+                    ;;
+                esac
+
+                (( ++x ))
+            done
+        done
+
+        echo "Scanline $i:" "${line[@]}" >&2
+        echo "Scanline $i:" "${cur_line[@]}" >&2
+
+        prev_line=("${cur_line[@]}")
+        result=("${result[@]}" "${cur_line[@]}")
+    done
+
+    echo "${result[@]}"
 }
 
 # Entry point
@@ -335,8 +446,6 @@ if ! type nawk &> /dev/null ; then
 fi
 
 input=($(read_bytes))
-
-echo "${input[@]}"
 
 if ! PNG_check_sign "${input[@]}" ; then
     echo 'File is not PNG image!' >&2
@@ -390,11 +499,13 @@ while true ; do
 
         header=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
 
-        if (( ${header[0]} == 0 || ${header[1]} == 0 )) ||
+        if (( "${header[0]}" == 0 || "${header[1]}" == 0 )) ||
             ! array_contains "${header[2]}" 1 2 4 8 16 ||
             ! array_contains "${header[3]}" 0 2 3 4 6 ||
             [[ "${header[5]}" -ne 0 ]] ||
-            ! array_contains "${header[6]}" 0 1 ; then
+            ! array_contains "${header[6]}" 0 1 ||
+            (array_contains "${header[3]}" 2 4 6 && array_contains "${header[2]}" 1 2 4) ||
+            (( "${header[3]}" == 3 && "${header[2]}" == 16 )); then
             echo 'Bad IHDR chunk' >&2
             exit
         fi
@@ -468,7 +579,7 @@ Interlace method: %d\n' "${header[@]}"
         ;;
 
     # Ignored chunks
-    * )
+    '*' )
         echo "Chunk ${chunk[1]} ignored" >&2
         ;;
     esac
@@ -479,4 +590,19 @@ done
 
 data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
 
-PNG_reconstruct "${header[@]}" "${data[@]}"
+parts=($(PNG_get_parts_sizes "${header[@]}"))
+parts_count="${parts[0]}"
+parts=("${parts[@]:1}")
+
+scanlines_count=0
+scanlines_widths=()
+for ((i=0; $i < "$parts_count"; ++i)) ; do
+    (( scanlines_count += "${parts[@]:$(($i * 2 + 1)):1}" ))
+
+    for ((j=${#scanlines_widths[@]}; $j < $scanlines_count; ++j)) ; do
+        scanlines_widths=("${scanlines_widths[@]}" "${parts[@]:$(($i * 2)):1}")
+    done
+done
+
+data=($(PNG_reconstruct "${header[@]}" "$scanlines_count" "${scanlines_widths[@]}" "${data[@]}"))
+echo "${data[@]}"
