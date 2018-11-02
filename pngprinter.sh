@@ -160,14 +160,14 @@ function PNG_read_chunk() {
 
     if [[ $length -ge 4294967296 ]] ; then
         echo 'Bad chunk size' >&2
-        exit
+        kill $$
     fi
 
     local type=("${input[@]:4:4}")
     for b in $type ; do
         if (( ($b < 65 || $b > 90) && ($b < 97 || $b > 122) )) ; then
             echo 'Bad chunk type' >&2
-            exit
+            kill $$
         fi
     done
 
@@ -356,11 +356,11 @@ function PNG_get_parts_sizes() {
         # TODO
 
         echo 'Interlace method 0 is not supported' >&2
-        exit
+        kill $$
         ;;
     '*' )
         echo "Unknown interlace method ${header[6]}" >&2
-        exit
+        kill $$
     esac
 }
 
@@ -378,7 +378,7 @@ function PNG_reconstruct() {
 
     if [[ "${header[5]}" -ne 0 ]] ; then
         echo "Unknown filter method ${header[5]}" >&2
-        exit
+        kill $$
     fi
 
     local pixel_size=1
@@ -435,11 +435,11 @@ function PNG_reconstruct() {
                 4 )
                     # TODO
                     echo 'Paeth filter type is unsupported' >&2
-                    exit
+                    kill $$
                     ;;
                 * )
                     echo "Unknown filter type $type" >&2
-                    exit
+                    kill $$
                     ;;
                 esac
 
@@ -463,7 +463,7 @@ input=($(read_bytes))
 
 if ! PNG_check_sign "${input[@]}" ; then
     echo 'File is not PNG image!' >&2
-    exit
+    kill $$
 fi
 
 input=("${input[@]:8}")
@@ -490,14 +490,14 @@ chunks=()
 while true ; do
     if [[ ${#input[@]} -eq 0 ]] ; then
         echo 'Missing IEND chunk' >&2
-        exit
+        kill $$
     fi
 
     chunk=($(PNG_read_chunk "${input[@]}"))
 
     if [[ ${#chunks[@]} -eq 0 ]] && [[ ${chunk[1]} != 'IHDR' ]] ; then
         echo 'Missing IHDR chunk' >&2
-        exit
+        kill $$
     fi
 
     printf 'Chunk %s length %d: %s\n' "${chunk[1]}" "${chunk[0]}" "${chunk[*]:2}" >&2
@@ -508,7 +508,7 @@ while true ; do
     'IHDR' )
         if [[ ${chunk[0]} -ne 13 ]] ; then
             echo 'Bad IHDR chunk' >&2
-            exit
+            kill $$
         fi
 
         header=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
@@ -521,7 +521,7 @@ while true ; do
             (array_contains "${header[3]}" 2 4 6 && array_contains "${header[2]}" 1 2 4) ||
             (( "${header[3]}" == 3 && "${header[2]}" == 16 )); then
             echo 'Bad IHDR chunk' >&2
-            exit
+            kill $$
         fi
 
         printf 'Image size: %dx%dpx
@@ -534,22 +534,22 @@ Interlace method: %d\n' "${header[@]}"
     'PLTE' )
         if array_contains 'PLTE' "${chunks[@]}" ; then
             echo 'PLTE chunks cannot be more than one' >&2
-            exit
+            kill $$
         fi
 
         if ! array_contains "${header[3]}" 2 3 6 ; then
             echo 'PLTE chunk is not allowed' >&2
-            exit
+            kill $$
         fi
 
         if (( ${chunk[0]} % 3 != 0 )) ; then
             echo 'Bad PLTE chunk' >&2
-            exit
+            kill $$
         fi
 
         if (( ${chunk[0]} / 3 > 2 ** ${header[2]} )) ; then
             echo 'Palette is too large for bit depth' >&2
-            exit
+            kill $$
         fi
 
         for ((i=2; $i < ${#chunk[@]}; i+=3)) ; do
@@ -559,7 +559,7 @@ Interlace method: %d\n' "${header[@]}"
     'IDAT' )
         if array_contains 'IDAT' "${chunks[@]}" && [[ "${chunks[@]:-1:1}" != 'IDAT' ]] ; then
             echo 'IDAT chunks must follow one by one' >&2
-            exit
+            kill $$
         fi
 
         data=("${data[@]}" "${chunk[@]:2}")
@@ -567,7 +567,7 @@ Interlace method: %d\n' "${header[@]}"
     'IEND' )
         if [[ ${chunk[0]} -ne 0 ]] ; then
             echo 'Bad IEND chunk' >&2
-            exit
+            kill $$
         fi
 
         break
@@ -577,7 +577,7 @@ Interlace method: %d\n' "${header[@]}"
     'tIME' )
         if array_contains 'tIME' "${chunks[@]}" ; then
             echo 'tIME chunks cannot be more than one' >&2
-            exit
+            kill $$
         fi
 
         echo 'Image last edit time:' "$(PNG_format_time ${chunk[@]:2})"
