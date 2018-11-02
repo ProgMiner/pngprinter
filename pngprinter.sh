@@ -336,11 +336,9 @@ function PNG_format_international_text() {
     esac
 }
 
-# Prints widths and heights of parts of image
-#
-# Printing format:
-#   First line: <parts count>
-#   Other lines: <part width> <part height>
+# Prints widths and heights of parts of image in following format:
+#   [0]  - parts count
+#   [1:] - parts sizes (2 numbers on part: width and height)
 #
 # @ - int[7] - image header
 function PNG_get_parts_sizes() {
@@ -348,11 +346,10 @@ function PNG_get_parts_sizes() {
 
     case "${header[6]}" in
     '0' )
-        echo 1
-        echo "${header[0]}" "${header[1]}"
+        echo 1 "${header[0]}" "${header[1]}"
         ;;
     '1' )
-        echo 0 #7
+        echo 7
         # TODO
 
         echo 'Interlace method 0 is not supported' >&2
