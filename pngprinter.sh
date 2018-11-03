@@ -164,7 +164,7 @@ function PNG_read_chunk() {
     fi
 
     local type=("${input[@]:4:4}")
-    for b in $type ; do
+    for b in "${type[@]}" ; do
         if (( ($b < 65 || $b > 90) && ($b < 97 || $b > 122) )) ; then
             echo 'Bad chunk type' >&2
             kill $$
