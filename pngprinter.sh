@@ -31,6 +31,24 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# Aliases
+
+if ! type nawk &> /dev/null ; then
+    # alias nawk=awk
+
+    function nawk() {
+        awk "$@"
+    }
+fi
+
+if ! type python2 &> /dev/null ; then
+    # alias python2=python
+
+    function python2() {
+        python "$@"
+    }
+fi
+
 # Functions
 
 ## Utilities
@@ -97,15 +115,7 @@ function rgb2ascii() {
 
 # Reads data from stream and prints bytes array
 function read_bytes() {
-    if ! type nawk &> /dev/null ; then
-        # alias nawk=awk
-
-        function nawk() {
-            awk "$@"
-        }
-    fi
-
-    echo "$( xxd -p -c 1 | nawk '
+    xxd -p -c 1 | nawk '
 BEGIN {
     for (i = 0; i < 256; ++i) {
         hex2dec[sprintf("%02x", i)] = i
@@ -113,21 +123,13 @@ BEGIN {
 }
 
 {
-    print hex2dec[$0]
+    printf("%s ", hex2dec[$0])
 }
-')"
+'
 }
 
 # Inflates deflated stream in zlib format
 function zlib_uncompress() {
-    if ! type python2 &> /dev/null ; then
-        # alias python2=python
-
-        function python2() {
-            python "$@"
-        }
-    fi
-
     python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
 }
 
