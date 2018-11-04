@@ -58,7 +58,7 @@ fi
 # https://unix.stackexchange.com/questions/92447/bash-script-to-get-ascii-values-for-alphabet
 #
 # 1 - int - char code
-chr() {
+function chr() {
     [ "$1" -lt 256 ] || return 1
     printf "\\$(printf '%03o' "$1")"
 }
@@ -88,6 +88,13 @@ function bytes2uint() {
     echo $ret
 }
 
+# Prints absolute value of number
+#
+# 1 - int - number
+function abs() {
+    echo ${1#-}
+}
+
 # Checks is array contains a value
 #
 # 1   - value
@@ -103,14 +110,27 @@ function array_contains() {
     return 1
 }
 
-# Converts RGB color to ASCII
+# Prints index of nearest value from array
 #
-# 1 - int - red component
-# 2 - int - green component
-# 3 - int - blue component
-function rgb2ascii() {
-    # TODO
-    echo 7
+# 1   - int   - value
+# @:2 - int[] - array
+function find_nearest() {
+    local input=("${@:2}")
+
+    local nearest=0
+    local diff=$(abs $((${input[0]} - $1)))
+    for ((i = 1; $i < ${#input[@]}; ++i)) ; do
+        if [[ $diff -eq 0 ]] ; then
+            break
+        fi
+
+        if [[ $(abs $((${input[$i]} - $1))) -lt $diff ]] ; then
+            diff=$(abs $((${input[$i]} - $1)))
+            nearest=$i
+        fi
+    done
+
+    echo $nearest
 }
 
 # Reads data from stream and prints bytes array
@@ -131,6 +151,28 @@ BEGIN {
 # Inflates deflated stream in zlib format
 function zlib_uncompress() {
     python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
+}
+
+# Converts color to ANSI ESC-sequence
+#
+# 1 - int - red component
+# 2 - int - green component
+# 3 - int - blue component
+# 4 - int - alpha component
+function color2ansi() {
+    local Color=(0 0x800000 0x8000 0x808000 0x80 0x800080 0x8080 0xC0C0C0)
+    local Alpha=('.' '+' '#')
+
+    local ctrl=40
+    local alpha=$4
+    if [[ $alpha -lt 128 ]] ; then
+        ctrl=30
+    else
+        alpha=$((256 - $alpha))
+    fi
+
+    printf '\x1B[%dm' $(($ctrl + $(find_nearest $(bytes2uint 0 "${@:1:3}") "${Color[@]}")))
+    printf '%c\x1B[0m' "${Alpha[$(find_nearest $alpha 0 64 128)]}"
 }
 
 ## PNG
@@ -238,7 +280,7 @@ function PNG_format_text() {
         echo 'Bad tEXt chunk' >&2
     fi
 
-    printf '%s: %s' "$keyword" "$(chr_array "${input[@]:$(( $i + 1 ))}" | cat -vt)"
+    printf '%s: %s' "$keyword" "$(chr_array "${input[@]:$i + 1}" | cat -vt)"
 }
 
 # Prints formatted zTXt content
@@ -363,97 +405,142 @@ function PNG_get_parts_sizes() {
     esac
 }
 
-# Reconstructs PNG image from filtered
+# Prints pixel size by PNG header in following format:
+#   [0] - int - count of bytes in pixel (from 1 to 4)
+#   [1] - int - count of pixels in byte (from 1 to 8)
 #
-# @:1:7          - int[7]  - image header
-# 8              - int     - scanlines count
-# @:9:$2         - int[$2] - scanlines widths
-# @:$(($2 + 10)) - int[]   - uncompressed PNG image bytes array
-function PNG_reconstruct() {
-    local header=("${@:1:7}")
-    local count="$8"
-    local widths=("${@:9:$2}")
-    local input=("${@:$(($2 + 9))}")
+# @ - int[7] - image header
+function PNG_get_pixel_size() {
+    local header=("$@")
 
-    if [[ "${header[5]}" -ne 0 ]] ; then
-        echo "Unknown filter method ${header[5]}" >&2
+    if [[ ${header[2]} -lt 8 ]] ; then
+        echo 1 $((8 / ${header[2]}))
+        return
+    fi
+
+    local comps=1
+    case ${header[3]} in
+    2 )
+        comps=3
+        ;;
+    4 )
+        comps=2
+        ;;
+    6 )
+        comps=4
+        ;;
+    esac
+
+    echo $(((${header[2]} / 8) * $comps)) 1
+}
+
+# PaethPredictor reconstruction function
+#
+# 1 - int - Recon(a)
+# 2 - int - Recon(b)
+# 3 - int - Recon(c)
+function PNG_reconstruct_byte_PaethPredictor() {
+    local a="$1"
+    local b="$2"
+    local c="$3"
+
+    local p=$(($a + $b - $c))
+    local pa=$(abs $(($p - $a)))
+    local pb=$(abs $(($p - $b)))
+    local pc=$(abs $(($p - $c)))
+
+    if [[ $pa -le $pb ]] && [[ $pa -le $pc ]] ; then
+        echo $a
+    elif [[ $pb -le $pc ]] ; then
+        echo $b
+    else
+        echo $c
+    fi
+}
+
+# Reconstructs scanline from filtered
+#
+# 1        - int     - filter method
+# 2        - int     - pixel size in bytes
+# 3        - int     - line length in bytes
+# 4        - int     - line filter type
+# @:5:$3   - int[$3] - filtered line
+# @:$3 + 5 - int[]   - reconstructed previous line
+function PNG_reconstruct_line() {
+    local line=("${@:5:$3}")
+    local prev_line=("${@:$3 + 5}")
+
+    if [[ $1 -ne 0 ]] ; then
+        echo "Unknown filter method $1" >&2
         kill $$
     fi
 
-    local pixel_size=1
-    if (( "${header[3]}" == 0 && "${header[2]}" == 16 )) ; then
-        pixel_size=2
-    elif array_contains "${header[3]}" 2 4 6 ; then
-        pixel_size=$(("${header[2]}" / 8))
-
-        if [[ "${header[3]}" -eq 2 ]] ; then
-            (( pixel_size *= 3 ))
-        else
-            (( pixel_size *= 4 ))
-        fi
-    fi
-
-    local result=()
-    local type=
-    local line=()
-    local cur_line=()
-    local prev_line=()
-    for ((i=0; $i < "$count"; ++i)); do
-        if [[ ${widths[$i]} -eq 0 ]] ; then
-            continue
-        fi
-
-        cur_line=()
-        type="${input[0]}"
-        line=("${input[@]:1:$((${widths[$i]} * $pixel_size))}")
-        input=("${input[@]:$((${widths[$i]} * $pixel_size + 1))}")
-
-        for ((x=0; $x < $(("${widths[$i]}" * $pixel_size)); )); do
-            for ((cx=0; $cx < "$pixel_size"; ++cx)); do
-                case "$type" in
-                0 )
-                    cur_line=("${cur_line[@]}" "${line[$x]}")
-                    ;;
-                1 )
-                    if [[ $x -lt $pixel_size ]] ; then
-                        cur_line=("${cur_line[@]}" "${line[$x]}")
-                    else
-                        cur_line=("${cur_line[@]}" $((("${line[$x]}" + "${cur_line[$(($x - $pixel_size))]}") % 256)))
-                    fi
-                    ;;
-                2 )
-                    cur_line=("${cur_line[@]}" $((("${line[$x]}" + "${prev_line[$x]}") % 256)))
-                    ;;
-                3 )
-                    if [[ $x -lt $pixel_size ]] ; then
-                        cur_line=("${cur_line[@]}" "${line[$x]}")
-                    else
-                        cur_line=("${cur_line[@]}" $((("${line[$x]}" + "${prev_line[$(($x - $pixel_size))]}") % 256)))
-                    fi
-                    ;;
-                4 )
-                    # TODO
-                    echo 'Paeth filter type is unsupported' >&2
-                    kill $$
-                    ;;
-                * )
-                    echo "Unknown filter type $type" >&2
-                    kill $$
-                    ;;
-                esac
-
-                (( ++x ))
-            done
-        done
-
-        echo "Scanline $i:" "${line[@]}" >&2
-        echo "Scanline $i:" "${cur_line[@]}" >&2
-
-        prev_line=("${cur_line[@]}")
-        result=("${result[@]}" "${cur_line[@]}")
+    cur_line=()
+    for ((x = 0; $x < $3; ++x)) ; do
+        case "$4" in
+        0 )
+            cur_line=("${cur_line[@]}" ${line[$x]})
+            ;;
+        1 )
+            if [[ $x -lt $2 ]] ; then
+                cur_line=("${cur_line[@]}" ${line[$x]})
+            else
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + ${cur_line[$(($x - $2))]}) % 256)))
+            fi
+            ;;
+        2 )
+            cur_line=("${cur_line[@]}" $(((${line[$x]} + ${prev_line[$x]:-0}) % 256)))
+            ;;
+        3 )
+            if [[ $x -lt $2 ]] ; then
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + ${prev_line[$x]:-0} / 2) % 256)))
+            else
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + (${cur_line[$(($x - $2))]} + ${prev_line[$x]:-0}) / 2) % 256)))
+            fi
+            ;;
+        4 )
+            if [[ $x -lt $2 ]] ; then
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_byte_PaethPredictor 0 ${prev_line[$x]:-0} 0) % 256))))
+            else
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_byte_PaethPredictor ${cur_line[$(($x - $2))]} ${prev_line[$x]:-0} ${prev_line[$(($x - $2))]:-0}) % 256))))
+            fi
+            ;;
+        * )
+            echo "Unknown filter type $4" >&2
+            kill $$
+            ;;
+        esac
     done
 
-    echo "${result[@]}"
+    echo "${cur_line[@]}"
+}
+
+# Splits bytes to pixels array
+#
+# @:1:2 - int[2] - pixel size
+# @:3   - int[]  - line bytes
+function PNG_unserialize_line() {
+    local input=("${@:3}")
+
+    local pixel=
+    local pixels=()
+    if [[ $2 -eq 1 ]] ; then
+        for ((i = 0; $i < ${#input[@]}; i += $1)) ; do
+            pixel="${input[*]:$i:$1}"
+            pixels=("${pixels[@]}" "${pixel// /:}")
+        done
+    else
+        local step=$((8 / $2))
+        local mask=$((2 ** $step - 1))
+
+        for byte in "${input[@]}" ; do
+            for ((i = 0; $i < $2; ++i)) ; do
+                pixels=("${pixels[@]}" $((($byte >> (8 - ($i + 1) * $step) & $mask))))
+            done
+        done
+    fi
+
+    echo "${pixels[@]}"
 }
 
 # Entry point
@@ -552,7 +639,8 @@ Interlace method: %d\n' "${header[@]}"
         fi
 
         for ((i=2; $i < ${#chunk[@]}; i+=3)) ; do
-            palette=("${palette[@]}" $(rgb2ascii ${chunk[@]:$i}))
+            palette_color="${chunk[*]:$i:3}"
+            palette=("${palette[@]}" ${palette_color// /:})
         done
         ;;
     'IDAT' )
@@ -603,19 +691,54 @@ done
 
 data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
 
+pixel_size=($(PNG_get_pixel_size "${header[@]}"))
+
 parts=($(PNG_get_parts_sizes "${header[@]}"))
 parts_count="${parts[0]}"
 parts=("${parts[@]:1}")
 
-scanlines_count=0
-scanlines_widths=()
-for ((i=0; $i < "$parts_count"; ++i)) ; do
-    (( scanlines_count += "${parts[@]:$(($i * 2 + 1)):1}" ))
+cur_image=()
+prev_line=()
+for ((i = 0; $i < $parts_count; ++i)) ; do
+    for ((y = 0; $y < ${parts[1]}; ++y)) ; do
+        filter_type=${data[0]}
+        data=("${data[@]:1}")
 
-    for ((j=${#scanlines_widths[@]}; $j < $scanlines_count; ++j)) ; do
-        scanlines_widths=("${scanlines_widths[@]}" "${parts[@]:$(($i * 2)):1}")
+        # Reconstruct line
+        length=$(((${parts[0]} * ${pixel_size[0]} + (${parts[0]} * ${pixel_size[0]}) % ${pixel_size[1]}) / ${pixel_size[1]}))
+        cur_line=($(PNG_reconstruct_line "${header[5]}" ${pixel_size[0]} $length "$filter_type" "${data[@]:0:$length}" "${prev_line[@]}"))
+        prev_line=("${cur_line[@]}")
+
+        # Unserialize line
+        line=($(PNG_unserialize_line "${pixel_size[@]}" "${cur_line[@]}"))
+        line=("${line[@]:0:${parts[0]}}")
+
+        for ((x = 0; $x < ${parts[0]}; ++x)) ; do
+            pixel="${line[$x]}"
+            pixel=(${pixel//:/ })
+
+            # Resolve palette colors
+            if [[ ${header[3]} -eq 3 ]] ; then
+                pixel=(${palette[${pixel[0]}]})
+                pixel=(${pixel//:/ })
+            fi
+
+            # Scale grayscale to RGB
+            if [[ ${#pixel[@]} -lt 3 ]] ; then
+                pixel=(${pixel[0]} ${pixel[0]} ${pixel[0]} ${pixel[1]:-255})
+            fi
+
+            # Add alpha component
+            if [[ ${#pixel[@]} -eq 3 ]] ; then
+                pixel=("${pixel[@]}" 255)
+            fi
+
+            color2ansi "${pixel[@]}"
+        done
+        echo
+
+        data=("${data[@]:$length}")
     done
-done
 
-data=($(PNG_reconstruct "${header[@]}" "$scanlines_count" "${scanlines_widths[@]}" "${data[@]}"))
-echo "${data[@]}"
+    parts=("${parts[@]:2}")
+done
