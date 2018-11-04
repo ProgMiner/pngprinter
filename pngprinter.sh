@@ -414,13 +414,14 @@ function PNG_get_parts_sizes() {
 # Prints pixel size by PNG header in following format:
 #   [0] - int - count of bytes in pixel (from 1 to 4)
 #   [1] - int - count of pixels in byte (from 1 to 8)
+#   [2] - int - bit depth
 #
 # @ - int[7] - image header
 function PNG_get_pixel_size() {
     local header=("$@")
 
     if [[ ${header[2]} -lt 8 ]] ; then
-        echo 1 $((8 / ${header[2]}))
+        echo 1 $((8 / ${header[2]})) ${header[2]}
         return
     fi
 
@@ -437,7 +438,7 @@ function PNG_get_pixel_size() {
         ;;
     esac
 
-    echo $(((${header[2]} / 8) * $comps)) 1
+    echo $(((${header[2]} / 8) * $comps)) 1 ${header[2]}
 }
 
 # PaethPredictor reconstruction function
@@ -520,27 +521,43 @@ function PNG_reconstruct_line() {
 
 # Splits bytes to pixels array
 #
-# @:1:2 - int[2] - pixel size
-# @:3   - int[]  - line bytes
+# @:1:3 - int[3] - pixel size
+# @:4   - int[]  - line bytes
 function PNG_unserialize_line() {
-    local input=("${@:3}")
+    local input=("${@:4}")
 
     local i
-    local pixel=
+    local byte
     local pixels=()
     if [[ $2 -eq 1 ]] ; then
         for ((i = 0; i < ${#input[@]}; i += $1)) ; do
-            pixel="${input[*]:$i:$1}"
+            local bytes=("${input[@]:$i:$1}")
+
+            local j
+            local buf=()
+            local pixel=()
+            for ((j = 0; j <= ${#bytes[@]}; ++j)) ; do
+                if [[ $j -ne 0 ]] && (($j % ($3 / 8) == 0)) ; then
+                    while [[ ${#buf[@]} -lt 4 ]] ; do
+                        buf=(0 "${buf[@]}")
+                    done
+
+                    pixel=("${pixel[@]}" $(bytes2uint "${buf[@]}"))
+                    buf=()
+                fi
+
+                buf=("${buf[@]}" ${bytes[$j]})
+            done
+
+            pixel="${pixel[*]}"
             pixels=("${pixels[@]}" "${pixel// /:}")
         done
     else
-        local step=$((8 / $2))
-        local mask=$((2 ** $step - 1))
+        local mask=$((2 ** $3 - 1))
 
-        local byte
         for byte in "${input[@]}" ; do
             for ((i = 0; i < $2; ++i)) ; do
-                pixels=("${pixels[@]}" $((($byte >> (8 - ($i + 1) * $step) & $mask))))
+                pixels=("${pixels[@]}" $((($byte >> (8 - ($i + 1) * $3) & $mask))))
             done
         done
     fi
@@ -571,6 +588,9 @@ header=()
 
 # Palette. Array with colors or empty if not used
 palette=()
+
+# Color that will be treated as transparent
+transparent=
 
 # Array of all IDAT chunks content
 data=()
@@ -665,6 +685,50 @@ Interlace method: %d\n' "${header[@]}"
         break
         ;;
 
+    # Ancillary chunks
+    'tRNS' )
+        if array_contains 'tRNS' "${chunks[@]}" ; then
+            echo 'tRNS chunk cannot be more than one' >&2
+            kill $$
+        fi
+
+        case ${header[3]} in
+        2 )
+            transparent=$(bytes2uint 0 0 ${chunk[@]:2})
+            ;;
+        4 )
+            buf=()
+            transparent=()
+            for ((j = 0; j <= 6; ++j)) ; do
+                if [[ $j -ne 0 ]] && (($j % 2 == 0)) ; then
+                    transparent=("${pixel[@]}" $(bytes2uint 0 0 "${buf[@]}"))
+                    buf=()
+                fi
+
+                buf=("${buf[@]}" ${chunk[$j + 2]})
+            done
+
+            transparent="${transparent[*]}"
+            transparent="${transparent// /:}"
+            ;;
+        3 )
+            if ! array_contains 'PLTE' "${chunks[@]}" ; then
+                echo 'tRNS chunk cannot be before PLTE' >&2
+                kill $$
+            fi
+
+            for ((i = 0; i + 2 < ${#chunk[@]}; ++i)); do
+                if [[ -z ${palette[$i]} ]] ; then
+                    echo 'tRNS chunk cannot contain more values than palette' >&2
+                    kill $$
+                fi
+
+                palette[$i]="${palette[$i]}:${chunk[$i + 2]}"
+            done
+            ;;
+        esac
+        ;;
+
     # Other chunks
     'tIME' )
         if array_contains 'tIME' "${chunks[@]}" ; then
@@ -708,8 +772,9 @@ parts_count="${parts[0]}"
 parts=("${parts[@]:1}")
 
 cur_image=()
-prev_line=()
 for ((i = 0; i < $parts_count; ++i)) ; do
+    prev_line=()
+
     for ((y = 0; y < ${parts[1]}; ++y)) ; do
         filter_type=${data[0]}
         data=("${data[@]:1}")
