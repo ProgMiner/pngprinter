@@ -146,6 +146,7 @@ function SRG_rgb2palette() {
 
 SGR_fix_cache_A=()
 SGR_fix_cache_B=()
+SGR_fix_cache_size=12
 # Fixes RGB SRG to ANSI palette
 #
 # If ESC-sequence is not SRG or is not ESC-sequence returns w/o printing anything.
@@ -174,13 +175,16 @@ function SRG_fix() {
 
     local j
     for ((j = 0; j < ${#SGR_fix_cache_A}; ++j)) ; do
-        if [[ ${SGR_fix_cache_A[$j]} == "$input" ]] ; then
+        if [[ "${SGR_fix_cache_A[$j]}" == "$input" ]] ; then
             printf '%s' "${SGR_fix_cache_B[$j]}"
+
+            SGR_fix_cache_A=("${SGR_fix_cache_A[$j]}" "${SGR_fix_cache_A[@]:0:$SGR_fix_cache_size - 1}")
+            SGR_fix_cache_B=("${SGR_fix_cache_B[$j]}" "${SGR_fix_cache_B[@]:0:$SGR_fix_cache_size - 1}")
             return
         fi
     done
 
-    SGR_fix_cache_A=("${SGR_fix_cache_A[@]}" "$input")
+    SGR_fix_cache_A=("$input" "${SGR_fix_cache_A[@]:0:$SGR_fix_cache_size - 1}")
 
     input=(${input//;/ })
 
@@ -204,7 +208,7 @@ function SRG_fix() {
     result="${result[*]}"
     printf '\x1B[%sm' "${result// /;}"
 
-    SGR_fix_cache_B=("${SGR_fix_cache_B[@]}" "$(printf '\x1B[%sm' "${result// /;}")")
+    SGR_fix_cache_B=("$(printf '\x1B[%sm' "${result// /;}")" "${SGR_fix_cache_B[@]:0:$SGR_fix_cache_size - 1}")
 }
 
 # Entry point
