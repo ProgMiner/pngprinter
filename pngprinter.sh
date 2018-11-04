@@ -644,7 +644,7 @@ Interlace method: %d\n' "${header[@]}"
         done
         ;;
     'IDAT' )
-        if array_contains 'IDAT' "${chunks[@]}" && [[ "${chunks[@]:-1:1}" != 'IDAT' ]] ; then
+        if array_contains 'IDAT' "${chunks[@]}" && [[ "${chunks[@]:${#chunks[@]} - 1:1}" != 'IDAT' ]] ; then
             echo 'IDAT chunks must follow one by one' >&2
             kill $$
         fi
