@@ -6,6 +6,7 @@
 # - bash
 # - awk | nawk
 # - python2 with zlib
+# - 256 colors terminal
 
 ## License:
 
@@ -160,19 +161,19 @@ function zlib_uncompress() {
 # 3 - int - blue component
 # 4 - int - alpha component
 function color2ansi() {
-    local Color=(0 0x800000 0x8000 0x808000 0x80 0x800080 0x8080 0xC0C0C0)
-    local Alpha=('.' '+' '#')
+    local Alpha=(' ' '#' '%' '$' '@')
 
-    local ctrl=40
+    local ctrl=48
     local alpha=$4
     if [[ $alpha -lt 128 ]] ; then
-        ctrl=30
+        ctrl=38
     else
-        alpha=$((256 - $alpha))
+        alpha=$((255 - $alpha))
+        printf '\x1B[30m'
     fi
 
-    printf '\x1B[%dm' $(($ctrl + $(find_nearest $(bytes2uint 0 "${@:1:3}") "${Color[@]}")))
-    printf '%c\x1B[0m' "${Alpha[$(find_nearest $alpha 0 64 128)]}"
+    printf '\x1B[%d;2;%d;%d;%dm' $ctrl "${@:1:3}"
+    printf '%c\x1B[0m' "${Alpha[$(find_nearest $alpha 0 24 48 72 96)]}"
 }
 
 ## PNG
@@ -439,22 +440,18 @@ function PNG_get_pixel_size() {
 # 1 - int - Recon(a)
 # 2 - int - Recon(b)
 # 3 - int - Recon(c)
-function PNG_reconstruct_byte_PaethPredictor() {
-    local a="$1"
-    local b="$2"
-    local c="$3"
-
-    local p=$(($a + $b - $c))
-    local pa=$(abs $(($p - $a)))
-    local pb=$(abs $(($p - $b)))
-    local pc=$(abs $(($p - $c)))
+function PNG_reconstruct_PaethPredictor() {
+    local p=$(($1 + $2 - $3))
+    local pa=$(abs $(($p - $1)))
+    local pb=$(abs $(($p - $2)))
+    local pc=$(abs $(($p - $3)))
 
     if [[ $pa -le $pb ]] && [[ $pa -le $pc ]] ; then
-        echo $a
+        echo $1
     elif [[ $pb -le $pc ]] ; then
-        echo $b
+        echo $2
     else
-        echo $c
+        echo $3
     fi
 }
 
@@ -475,7 +472,7 @@ function PNG_reconstruct_line() {
         kill $$
     fi
 
-    cur_line=()
+    local cur_line=()
     for ((x = 0; $x < $3; ++x)) ; do
         case "$4" in
         0 )
@@ -485,7 +482,7 @@ function PNG_reconstruct_line() {
             if [[ $x -lt $2 ]] ; then
                 cur_line=("${cur_line[@]}" ${line[$x]})
             else
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + ${cur_line[$(($x - $2))]}) % 256)))
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + ${cur_line[$x - $2]}) % 256)))
             fi
             ;;
         2 )
@@ -495,14 +492,14 @@ function PNG_reconstruct_line() {
             if [[ $x -lt $2 ]] ; then
                 cur_line=("${cur_line[@]}" $(((${line[$x]} + ${prev_line[$x]:-0} / 2) % 256)))
             else
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + (${cur_line[$(($x - $2))]} + ${prev_line[$x]:-0}) / 2) % 256)))
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + (${cur_line[$x - $2]} + ${prev_line[$x]:-0}) / 2) % 256)))
             fi
             ;;
         4 )
             if [[ $x -lt $2 ]] ; then
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_byte_PaethPredictor 0 ${prev_line[$x]:-0} 0) % 256))))
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor 0 ${prev_line[$x]:-0} 0) % 256))))
             else
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_byte_PaethPredictor ${cur_line[$(($x - $2))]} ${prev_line[$x]:-0} ${prev_line[$(($x - $2))]:-0}) % 256))))
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor ${cur_line[$x - $2]} ${prev_line[$x]:-0} ${prev_line[$x - $2]:-0})) % 256)))
             fi
             ;;
         * )
@@ -733,7 +730,8 @@ for ((i = 0; $i < $parts_count; ++i)) ; do
                 pixel=("${pixel[@]}" 255)
             fi
 
-            color2ansi "${pixel[@]}"
+            chr="$(color2ansi "${pixel[@]}")"
+            printf '%s%s' "$chr" "$chr"
         done
         echo
 
