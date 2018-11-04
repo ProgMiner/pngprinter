@@ -6,7 +6,7 @@
 # - bash
 # - awk | nawk
 # - python2 with zlib
-# - 256 colors terminal
+# - True-color terminal
 
 ## License:
 
@@ -70,6 +70,7 @@ function chr() {
 function chr_array() {
     local input=("$@")
 
+    local c
     for c in "${input[@]}" ; do
         chr $c
     done
@@ -81,9 +82,10 @@ function chr_array() {
 function bytes2uint() {
     local input=("$@")
 
+    local i
     local ret=0
-    for ((i=0; $i < 4; ++i)) ; do
-        ret=$(( $ret + (${input[$i]} << (8 * (3 - $i))) ))
+    for ((i = 0; i < 4; ++i)) ; do
+        ret=$(($ret + (${input[$i]} << (8 * (3 - $i)))))
     done
 
     echo $ret
@@ -104,6 +106,7 @@ function array_contains() {
     local input=("${@:2}")
     local value="$1"
 
+    local elem
     for elem in "${input[@]}" ; do
         [[ $value == $elem ]] && return 0
     done
@@ -118,9 +121,10 @@ function array_contains() {
 function find_nearest() {
     local input=("${@:2}")
 
+    local i
     local nearest=0
     local diff=$(abs $((${input[0]} - $1)))
-    for ((i = 1; $i < ${#input[@]}; ++i)) ; do
+    for ((i = 1; i < ${#input[@]}; ++i)) ; do
         if [[ $diff -eq 0 ]] ; then
             break
         fi
@@ -185,7 +189,8 @@ function PNG_check_sign() {
     local sign=(137 80 78 71 13 10 26 10)
     local input=("$@")
 
-    for ((i=0; $i < ${#sign[@]}; ++i)) ; do
+    local i
+    for ((i = 0; i < ${#sign[@]}; ++i)) ; do
         [[ ${input[$i]} -ne ${sign[$i]} ]] && return 1
     done
 
@@ -202,12 +207,12 @@ function PNG_read_chunk() {
     local input=("$@")
 
     local length=$(bytes2uint "${input[@]}")
-
     if [[ $length -ge 4294967296 ]] ; then
         echo 'Bad chunk size' >&2
         kill $$
     fi
 
+    local b
     local type=("${input[@]:4:4}")
     for b in "${type[@]}" ; do
         if (( ($b < 65 || $b > 90) && ($b < 97 || $b > 122) )) ; then
@@ -271,7 +276,7 @@ function PNG_format_text() {
 
     local i=0
     local keyword=
-    for ((; $i < "${#input[@]}"; ++i)) ; do
+    for ((; i < "${#input[@]}"; ++i)) ; do
         [[ "${input[$i]}" -eq 0 ]] && break
 
         keyword="$keyword$(chr "${input[$i]}")"
@@ -295,7 +300,7 @@ function PNG_format_compressed_text() {
 
     local i=0
     local keyword=
-    for ((; $i < "${#input[@]}"; ++i)) ; do
+    for ((; i < "${#input[@]}"; ++i)) ; do
         [[ "${input[$i]}" -eq 0 ]] && break
 
         keyword="$keyword$(chr "${input[$i]}")"
@@ -324,7 +329,7 @@ function PNG_format_international_text() {
 
     local i=0
     local keyword=
-    for ((; $i < "${#input[@]}"; ++i)) ; do
+    for ((; i < "${#input[@]}"; ++i)) ; do
         [[ "${input[$i]}" -eq 0 ]] && break
 
         keyword="$keyword$(chr "${input[$i]}")"
@@ -342,7 +347,7 @@ function PNG_format_international_text() {
 
     ((++i))
     local lang=
-    for ((; $i < "${#input[@]}"; ++i)) ; do
+    for ((; i < "${#input[@]}"; ++i)) ; do
         [[ "${input[$i]}" -eq 0 ]] && break
 
         lang="$lang$(chr "${input[$i]}")"
@@ -350,7 +355,7 @@ function PNG_format_international_text() {
 
     ((++i))
     local trans_keyword=
-    for ((; $i < "${#input[@]}"; ++i)) ; do
+    for ((; i < "${#input[@]}"; ++i)) ; do
         [[ "${input[$i]}" -eq 0 ]] && break
 
         trans_keyword=("${trans_keyword[@]}" "${input[$i]}")
@@ -401,7 +406,7 @@ function PNG_get_parts_sizes() {
         kill $$
         ;;
     '*' )
-        echo "Unknown interlace method ${header[6]}" >&2
+        echo "Undefined interlace method ${header[6]}" >&2
         kill $$
     esac
 }
@@ -468,12 +473,13 @@ function PNG_reconstruct_line() {
     local prev_line=("${@:$3 + 5}")
 
     if [[ $1 -ne 0 ]] ; then
-        echo "Unknown filter method $1" >&2
+        echo "Undefined filter method $1" >&2
         kill $$
     fi
 
+    local x
     local cur_line=()
-    for ((x = 0; $x < $3; ++x)) ; do
+    for ((x = 0; x < $3; ++x)) ; do
         case "$4" in
         0 )
             cur_line=("${cur_line[@]}" ${line[$x]})
@@ -503,7 +509,7 @@ function PNG_reconstruct_line() {
             fi
             ;;
         * )
-            echo "Unknown filter type $4" >&2
+            echo "Undefined filter type $4" >&2
             kill $$
             ;;
         esac
@@ -519,10 +525,11 @@ function PNG_reconstruct_line() {
 function PNG_unserialize_line() {
     local input=("${@:3}")
 
+    local i
     local pixel=
     local pixels=()
     if [[ $2 -eq 1 ]] ; then
-        for ((i = 0; $i < ${#input[@]}; i += $1)) ; do
+        for ((i = 0; i < ${#input[@]}; i += $1)) ; do
             pixel="${input[*]:$i:$1}"
             pixels=("${pixels[@]}" "${pixel// /:}")
         done
@@ -530,8 +537,9 @@ function PNG_unserialize_line() {
         local step=$((8 / $2))
         local mask=$((2 ** $step - 1))
 
+        local byte
         for byte in "${input[@]}" ; do
-            for ((i = 0; $i < $2; ++i)) ; do
+            for ((i = 0; i < $2; ++i)) ; do
                 pixels=("${pixels[@]}" $((($byte >> (8 - ($i + 1) * $step) & $mask))))
             done
         done
@@ -635,7 +643,7 @@ Interlace method: %d\n' "${header[@]}"
             kill $$
         fi
 
-        for ((i=2; $i < ${#chunk[@]}; i+=3)) ; do
+        for ((i = 2; i < ${#chunk[@]}; i += 3)) ; do
             palette_color="${chunk[*]:$i:3}"
             palette=("${palette[@]}" ${palette_color// /:})
         done
@@ -667,13 +675,16 @@ Interlace method: %d\n' "${header[@]}"
         echo 'Image last edit time:' "$(PNG_format_time ${chunk[@]:2})"
         ;;
     'iTXt' )
-        echo "$(PNG_format_international_text "${chunk[@]:2}")"
+        PNG_format_international_text "${chunk[@]:2}"
+        echo
         ;;
     'tEXt' )
-        echo "$(PNG_format_text "${chunk[@]:2}")"
+        PNG_format_text "${chunk[@]:2}"
+        echo
         ;;
     'zTXt' )
-        echo "$(PNG_compressed_text "${chunk[@]:2}")"
+        PNG_compressed_text "${chunk[@]:2}"
+        echo
         ;;
 
     # Ignored chunks
@@ -686,7 +697,9 @@ Interlace method: %d\n' "${header[@]}"
     chunks=("${chunks[@]}" "${chunk[1]}")
 done
 
+printf 'Uncompressing...'
 data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
+echo $'   Done!'
 
 pixel_size=($(PNG_get_pixel_size "${header[@]}"))
 
@@ -696,8 +709,8 @@ parts=("${parts[@]:1}")
 
 cur_image=()
 prev_line=()
-for ((i = 0; $i < $parts_count; ++i)) ; do
-    for ((y = 0; $y < ${parts[1]}; ++y)) ; do
+for ((i = 0; i < $parts_count; ++i)) ; do
+    for ((y = 0; y < ${parts[1]}; ++y)) ; do
         filter_type=${data[0]}
         data=("${data[@]:1}")
 
@@ -710,7 +723,7 @@ for ((i = 0; $i < $parts_count; ++i)) ; do
         line=($(PNG_unserialize_line "${pixel_size[@]}" "${cur_line[@]}"))
         line=("${line[@]:0:${parts[0]}}")
 
-        for ((x = 0; $x < ${parts[0]}; ++x)) ; do
+        for ((x = 0; x < ${parts[0]}; ++x)) ; do
             pixel="${line[$x]}"
             pixel=(${pixel//:/ })
 
