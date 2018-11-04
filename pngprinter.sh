@@ -567,6 +567,30 @@ function PNG_unserialize_line() {
 
 # Entry point
 
+## Options handling
+
+options=()
+for ((i = 1; i <= $#; ++i)) ; do
+    case "${!i}" in
+    '-v'|'--verbose' )
+        options=("${options[@]}" 'verbose')
+        ;;
+    '-q'|'--quiet' )
+        options=("${options[@]}" 'quiet')
+        ;;
+    '-i'|'--ignore' )
+        ((++i))
+
+        if array_contains "${!i}" IHDR PLTE IDAT IEND ; then
+            echo 'Cannot ignore critical chunks!' >&2
+            kill $$
+        fi
+
+        options=("${options[@]}" "ignore ${!i}")
+        ;;
+    esac
+done
+
 input=($(read_bytes))
 
 if ! PNG_check_sign "${input[@]}" ; then
@@ -611,7 +635,13 @@ while true ; do
         kill $$
     fi
 
-    printf 'Chunk %s length %d: %s\n' "${chunk[1]}" "${chunk[0]}" "${chunk[*]:2}" >&2
+    input=($(PNG_skip_chunk ${chunk[0]} "${input[@]}"))
+    if array_contains "ignore ${chunk[1]}" "${options[@]}" ; then
+        array_contains 'verbose' "${options[@]}" && echo "Chunk ${chunk[1]} ignored" >&2
+        continue
+    fi
+
+    array_contains 'verbose' "${options[@]}" && printf 'Chunk %s length %d: %s\n' "${chunk[1]}" "${chunk[0]}" "${chunk[*]:2}" >&2
 
     case "${chunk[1]}" in
 
@@ -635,7 +665,7 @@ while true ; do
             kill $$
         fi
 
-        printf 'Image size: %dx%dpx
+        array_contains 'quiet' "${options[@]}" || printf 'Image size: %dx%dpx
 Bit depth: %d
 Colour type: %d
 Compression method: %d
@@ -757,13 +787,12 @@ Interlace method: %d\n' "${header[@]}"
         ;;
     esac
 
-    input=($(PNG_skip_chunk ${chunk[0]} "${input[@]}"))
     chunks=("${chunks[@]}" "${chunk[1]}")
 done
 
-printf 'Uncompressing...'
+array_contains 'quiet' "${options[@]}" || printf 'Uncompressing...'
 data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
-echo $'   Done!'
+array_contains 'quiet' "${options[@]}" || echo $'   Done!'
 
 pixel_size=($(PNG_get_pixel_size "${header[@]}"))
 
