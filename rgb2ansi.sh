@@ -61,6 +61,20 @@ function find_nearest_color() {
     echo $nearest
 }
 
+# Moves up one element from array
+#
+# 1   - int   - element id
+# @:2 - int[] - array
+function array_move_up() {
+    local i
+
+    for ((i = 1; i <= $# - 1; ++i)) ; do
+        [[ $i -eq $1 ]] && continue
+
+        echo ${!i}
+    done
+}
+
 ## SRG
 
 # https://github.com/sindresorhus/xterm-colors/blob/master/xterm-colors.json
@@ -139,9 +153,7 @@ SGR_rgb2palette_Palette_codes=(
 # @:1:3 - int[3] - RGB
 # 4     - int    - 3/4 - fg/bg marker
 function SRG_rgb2palette() {
-    local marker=${4:0:1}
-
-    echo "$marker${SGR_rgb2palette_Palette_codes[$(find_nearest_color "${@:1:3}" "${SGR_rgb2palette_Palette_values[@]}")]//;/ }"
+    echo "${4:0:1}${SGR_rgb2palette_Palette_codes[$(find_nearest_color "${@:1:3}" "${SGR_rgb2palette_Palette_values[@]}")]//;/ }"
 }
 
 SGR_fix_cache_A=()
@@ -153,16 +165,11 @@ SGR_fix_cache_size=12
 #
 # @ - char[] - ESC-sequence
 function SRG_fix() {
+    local i
+
     local input=("$@")
 
-    if [[ ${input[0]} != $'\x1B' ]] ; then
-        return
-    fi
-
-    if [[ ${input[@]:${#input[@]} - 1:1} != m ]] ; then
-        return
-    fi
-
+    ([[ ${input[0]} != $'\x1B' ]] || [[ ${input[@]:${#input[@]} - 1:1} != m ]]) && return
     if [[ ${input[1]} != '[' ]] || [[ ${#input[@]} -eq 2 ]] ; then
         input="${input[*]}"
 
@@ -173,30 +180,24 @@ function SRG_fix() {
     input="${input[*]:2:${#input[@]} - 3}"
     input="${input// /}"
 
-    local j
-    for ((j = 0; j < ${#SGR_fix_cache_A}; ++j)) ; do
-        if [[ "${SGR_fix_cache_A[$j]}" == "$input" ]] ; then
-            printf '%s' "${SGR_fix_cache_B[$j]}"
+    for ((i = 0; i < ${#SGR_fix_cache_A}; ++i)) ; do
+        [[ "${SGR_fix_cache_A[$i]}" != "$input" ]] && continue
 
-            SGR_fix_cache_A=("${SGR_fix_cache_A[$j]}" "${SGR_fix_cache_A[@]:0:$SGR_fix_cache_size - 1}")
-            SGR_fix_cache_B=("${SGR_fix_cache_B[$j]}" "${SGR_fix_cache_B[@]:0:$SGR_fix_cache_size - 1}")
-            return
-        fi
+        printf '%s' "${SGR_fix_cache_B[$i]}"
+        [[ $i -eq 0 ]] && return
+
+        SGR_fix_cache_A=(array_move_up $i "${SRG_fix_cache_A[@]}")
+        SGR_fix_cache_B=(array_move_up $i "${SRG_fix_cache_B[@]}")
+        return
     done
 
     SGR_fix_cache_A=("$input" "${SGR_fix_cache_A[@]:0:$SGR_fix_cache_size - 1}")
 
     input=(${input//;/ })
 
-    local i
     local result=()
     for ((i = 0; i < ${#input[@]}; ++i)) ; do
-        if [[ ${input[$i]} -ne 38 ]] && [[ ${input[$i]} -ne 48 ]] ; then
-            result=("${result[@]}" "${input[$i]}")
-            continue
-        fi
-
-        if [[ ${input[$i + 1]} -ne 2 ]] ; then
+        if [[ ${input[$i]} -ne 38 ]] && [[ ${input[$i]} -ne 48 ]] || [[ ${input[$i + 1]} -ne 2 ]] ; then
             result=("${result[@]}" "${input[$i]}")
             continue
         fi
