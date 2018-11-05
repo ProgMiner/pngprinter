@@ -559,7 +559,7 @@ function PNG_reconstruct_line() {
             ;;
         4 )
             if [[ $x -lt $2 ]] ; then
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor 0 ${prev_line[$x]:-0} 0) % 256))))
+                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor 0 ${prev_line[$x]:-0} 0)) % 256)))
             else
                 cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor ${cur_line[$x - $2]} ${prev_line[$x]:-0} ${prev_line[$x - $2]:-0})) % 256)))
             fi
