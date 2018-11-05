@@ -76,16 +76,15 @@ function chr_array() {
     done
 }
 
-# Converts 4 bytes to unsigned integer and prints it
+# Converts bytes to unsigned integer and prints it
 #
-# @ - int[4] - array of bytes
+# @ - int[] - array of bytes
 function bytes2uint() {
-    local input=("$@")
-
     local i
+
     local ret=0
-    for ((i = 0; i < 4; ++i)) ; do
-        ret=$(($ret + (${input[$i]} << (8 * (3 - $i)))))
+    for ((i = 1; i <= $#; ++i)) ; do
+        ret=$(($ret + (${!i} << (8 * ($# - $i)))))
     done
 
     echo $ret
@@ -158,43 +157,34 @@ function zlib_uncompress() {
     python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
 }
 
+# Mixes color with background color
+#
+# @link https://habr.com/post/98743/
+#
+# @:1:4 - foreground color RGBA
+# @:5:3 - background color RGB
+function apply_background() {
+    echo $(($5 + ($1 - $5) * $4 / 255))
+    echo $(($6 + ($2 - $6) * $4 / 255))
+    echo $(($7 + ($3 - $7) * $4 / 255))
+}
+
 # Converts color to ANSI ESC-sequence
 #
-# 1 - int - red component
-# 2 - int - green component
-# 3 - int - blue component
-# 4 - int - alpha component
+# @:1:4 - RGBA
+# @:5:3 - background RGB
 function color2ansi() {
-    local Alpha=(' ' '#' '%' '$' '@')
-
-    local ctrl=48
-    local alpha=$4
-    if [[ $alpha -lt 128 ]] ; then
-        ctrl=38
-    else
-        alpha=$((255 - $alpha))
-        printf '\x1B[30m'
-    fi
-
-    printf '\x1B[%d;2;%d;%d;%dm' $ctrl "${@:1:3}"
-    printf '%c\x1B[0m' "${Alpha[$(find_nearest $alpha 0 24 48 72 96)]}"
+    printf '\x1B[48;2;%d;%d;%dm \x1B[0m' $(apply_background "$@")
 }
 
 ## PNG
 
+PNG_check_sign_sign="137 80 78 71 13 10 26 10"
 # Checks is bytes is a PNG image
 #
 # @ - int[8] - array of bytes
 function PNG_check_sign() {
-    local sign=(137 80 78 71 13 10 26 10)
-    local input=("$@")
-
-    local i
-    for ((i = 0; i < ${#sign[@]}; ++i)) ; do
-        [[ ${input[$i]} -ne ${sign[$i]} ]] && return 1
-    done
-
-    return 0
+    [[ "${*:1:8}" == "$PNG_check_sign_sign" ]]
 }
 
 # Reads chunk and prints it in following format:
@@ -206,7 +196,7 @@ function PNG_check_sign() {
 function PNG_read_chunk() {
     local input=("$@")
 
-    local length=$(bytes2uint "${input[@]}")
+    local length=$(bytes2uint "${input[@]:0:4}")
     if [[ $length -ge 4294967296 ]] ; then
         echo 'Bad chunk size' >&2
         kill $$
@@ -261,7 +251,7 @@ function PNG_uncompress() {
 function PNG_format_time() {
     local input=("$@")
 
-    local time=($(bytes2uint 0 0 "${input[@]}") "${input[@]:2}")
+    local time=($(bytes2uint "${input[@]}") "${input[@]:2}")
     printf '%02d-%02d-%02d %02d:%02d:%02d' "${time[@]}"
 }
 
@@ -538,10 +528,6 @@ function PNG_unserialize_line() {
             local pixel=()
             for ((j = 0; j <= ${#bytes[@]}; ++j)) ; do
                 if [[ $j -ne 0 ]] && (($j % ($3 / 8) == 0)) ; then
-                    while [[ ${#buf[@]} -lt 4 ]] ; do
-                        buf=(0 "${buf[@]}")
-                    done
-
                     pixel=("${pixel[@]}" $(bytes2uint "${buf[@]}"))
                     buf=()
                 fi
@@ -588,6 +574,18 @@ for ((i = 1; i <= $#; ++i)) ; do
 
         options=("${options[@]}" "ignore ${!i}")
         ;;
+    '-b'|'--background' )
+        ((++i))
+        background=("${!i}")
+
+        ((++i))
+        background=("${background[@]}" "${!i}")
+
+        ((++i))
+        background=("${background[@]}" "${!i}")
+
+        options=("${options[@]}" "background")
+        ;;
     esac
 done
 
@@ -615,6 +613,9 @@ palette=()
 
 # Color that will be treated as transparent
 transparent=
+
+# Background color
+array_contains 'background' "${options[@]}" || background=(0 0 0)
 
 # Array of all IDAT chunks content
 data=()
@@ -652,7 +653,7 @@ while true ; do
             kill $$
         fi
 
-        header=($(bytes2uint ${chunk[@]:2}) $(bytes2uint ${chunk[@]:6}) "${chunk[@]:10}")
+        header=($(bytes2uint ${chunk[@]:2:4}) $(bytes2uint ${chunk[@]:6:4}) "${chunk[@]:10}")
 
         if (( "${header[0]}" == 0 || "${header[1]}" == 0 )) ||
             ! array_contains "${header[2]}" 1 2 4 8 16 ||
@@ -724,14 +725,14 @@ Interlace method: %d\n' "${header[@]}"
 
         case ${header[3]} in
         2 )
-            transparent=$(bytes2uint 0 0 ${chunk[@]:2})
+            transparent=$(($(bytes2uint ${chunk[@]:2}) / 255))
             ;;
         4 )
             buf=()
             transparent=()
             for ((j = 0; j <= 6; ++j)) ; do
                 if [[ $j -ne 0 ]] && (($j % 2 == 0)) ; then
-                    transparent=("${pixel[@]}" $(bytes2uint 0 0 "${buf[@]}"))
+                    transparent=("${pixel[@]}" $(($(bytes2uint "${buf[@]}") / 255)))
                     buf=()
                 fi
 
@@ -758,8 +759,40 @@ Interlace method: %d\n' "${header[@]}"
             ;;
         esac
         ;;
+    'bKGD' )
+        if array_contains 'bKGD' "${chunks[@]}" ; then
+            echo 'bKGD chunk cannot be more than one' >&2
+            kill $$
+        fi
 
-    # Other chunks
+        case ${header[3]} in
+        2 )
+            background=$(($(bytes2uint ${chunk[@]:2}) / 255))
+            background=($background $background $background)
+            ;;
+        4 )
+            buf=()
+            background=()
+            for ((j = 0; j <= 6; ++j)) ; do
+                if [[ $j -ne 0 ]] && (($j % 2 == 0)) ; then
+                    background=("${pixel[@]}" $(($(bytes2uint "${buf[@]}") / 255)))
+                    buf=()
+                fi
+
+                buf=("${buf[@]}" ${chunk[$j + 2]})
+            done
+            ;;
+        3 )
+            if ! array_contains 'PLTE' "${chunks[@]}" ; then
+                echo 'bKGD chunk cannot be before PLTE' >&2
+                kill $$
+            fi
+
+            background=(${palette[${chunk[2]}]//:/ })
+            background=("${background[@]:0:3}")
+            ;;
+        esac
+        ;;
     'tIME' )
         if array_contains 'tIME' "${chunks[@]}" ; then
             echo 'tIME chunks cannot be more than one' >&2
@@ -815,7 +848,6 @@ for ((i = 0; i < $parts_count; ++i)) ; do
 
         # Unserialize line
         line=($(PNG_unserialize_line "${pixel_size[@]}" "${cur_line[@]}"))
-        line=("${line[@]:0:${parts[0]}}")
 
         for ((x = 0; x < ${parts[0]}; ++x)) ; do
             pixel="${line[$x]}"
@@ -837,7 +869,7 @@ for ((i = 0; i < $parts_count; ++i)) ; do
                 pixel=("${pixel[@]}" 255)
             fi
 
-            chr="$(color2ansi "${pixel[@]}")"
+            chr="$(color2ansi "${pixel[@]}" "${background[@]}")"
             printf '%s%s' "$chr" "$chr"
         done
         echo
