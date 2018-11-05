@@ -54,6 +54,8 @@ fi
 
 ## Utilities
 
+### Bytes
+
 # Prints char with specified ASCII code
 #
 # https://unix.stackexchange.com/questions/92447/bash-script-to-get-ascii-values-for-alphabet
@@ -68,11 +70,10 @@ function chr() {
 #
 # @ - int[] - char codes
 function chr_array() {
-    local input=("$@")
+    local i
 
-    local c
-    for c in "${input[@]}" ; do
-        chr $c
+    for ((i = 1; i <= $#; ++i)) ; do
+        chr ${!i}
     done
 }
 
@@ -90,6 +91,23 @@ function bytes2uint() {
     echo $ret
 }
 
+# Reads data from stream and prints bytes array
+function read_bytes() {
+    xxd -p -c 1 | nawk '
+BEGIN {
+    for (i = 0; i < 256; ++i) {
+        hex2dec[sprintf("%02x", i)] = i
+    }
+}
+
+{
+    printf("%s ", hex2dec[$0])
+}
+'
+}
+
+### Math
+
 # Prints absolute value of number
 #
 # 1 - int - number
@@ -97,10 +115,12 @@ function abs() {
     echo ${1#-}
 }
 
+### Arrays
+
 # Checks is array contains a value
 #
-# 1   - value
-# @:2 - array
+# 1   - string   - value
+# @:2 - string[] - array
 function array_contains() {
     local input=("${@:2}")
     local value="$1"
@@ -137,47 +157,86 @@ function find_nearest() {
     echo $nearest
 }
 
-# Reads data from stream and prints bytes array
-function read_bytes() {
-    xxd -p -c 1 | nawk '
-BEGIN {
-    for (i = 0; i < 256; ++i) {
-        hex2dec[sprintf("%02x", i)] = i
-    }
+### Color
+
+# Mixes color with background color
+#
+# @link https://habr.com/post/98743/
+#
+# @:1:4 - int[4] - foreground color RGBA
+# @:5:3 - int[3] - background color RGB
+# 8     - int    - bit depth
+function apply_background() {
+    local max=$((2 ** $8 - 1))
+
+    echo $(($5 + ($1 - $5) * $4 / $max))
+    echo $(($6 + ($2 - $6) * $4 / $max))
+    echo $(($7 + ($3 - $7) * $4 / $max))
 }
 
-{
-    printf("%s ", hex2dec[$0])
+# Converts color to ANSI ESC-sequence
+#
+# 1     - int    - bit depth
+# @:2:3 - int[3] - RGB
+function color2ansi() {
+    local color=(
+        $(($2 * 256 / (2 ** $1)))
+        $(($3 * 256 / (2 ** $1)))
+        $(($4 * 256 / (2 ** $1)))
+    )
+
+    printf '\x1B[48;2;%d;%d;%dm \x1B[0m' "${color[@]}"
 }
-'
+
+# Serializes color array
+#
+# @ - color components
+function color_serialize() {
+    local color="$*"
+    echo "${color// /:}"
 }
+
+# Unserializes color array
+#
+# 1 - serialized color components
+function color_unserialize() {
+    echo "${1//:/ }"
+}
+
+### Other
 
 # Inflates deflated stream in zlib format
 function zlib_uncompress() {
     python2 -c "import zlib,sys;sys.stdout.write(zlib.decompress(sys.stdin.read()))"
 }
 
-# Mixes color with background color
-#
-# @link https://habr.com/post/98743/
-#
-# @:1:4 - foreground color RGBA
-# @:5:3 - background color RGB
-function apply_background() {
-    echo $(($5 + ($1 - $5) * $4 / 255))
-    echo $(($6 + ($2 - $6) * $4 / 255))
-    echo $(($7 + ($3 - $7) * $4 / 255))
-}
-
-# Converts color to ANSI ESC-sequence
-#
-# @:1:4 - RGBA
-# @:5:3 - background RGB
-function color2ansi() {
-    printf '\x1B[48;2;%d;%d;%dm \x1B[0m' $(apply_background "$@")
-}
-
 ## PNG
+
+# Converts bytes to color
+#
+# 1   - int   - bit depth
+# @:2 - int[] - color components
+function PNG_bytes2color() {
+    local i
+
+    local comp=$(($1 / 8))
+    [[ $comp -eq 0 ]] && comp=1
+
+    local bytes=("${@:2}")
+
+    local buf=()
+    local color=()
+    for ((i = 0; i <= ${#bytes[@]}; ++i)) ; do
+        if [[ $i -ne 0 ]] && (($i % $comp == 0)) ; then
+            color=("${color[@]}" $(bytes2uint "${buf[@]}"))
+            buf=()
+        fi
+
+        buf=("${buf[@]}" ${bytes[$i]})
+    done
+
+    echo "${color[@]}"
+}
 
 PNG_check_sign_sign="137 80 78 71 13 10 26 10"
 # Checks is bytes is a PNG image
@@ -251,7 +310,7 @@ function PNG_uncompress() {
 function PNG_format_time() {
     local input=("$@")
 
-    local time=($(bytes2uint "${input[@]}") "${input[@]:2}")
+    local time=($(bytes2uint "${input[@]:0:2}") "${input[@]:2}")
     printf '%02d-%02d-%02d %02d:%02d:%02d' "${time[@]}"
 }
 
@@ -401,6 +460,26 @@ function PNG_get_parts_sizes() {
     esac
 }
 
+# Prints pixel components count
+#
+# @ - int[7] - image header
+function PNG_get_pixel_components() {
+    case "$4" in
+    0|3 )
+        echo 1
+        ;;
+    4 )
+        echo 2
+        ;;
+    2 )
+        echo 3
+        ;;
+    6 )
+        echo 4
+        ;;
+    esac
+}
+
 # Prints pixel size by PNG header in following format:
 #   [0] - int - count of bytes in pixel (from 1 to 4)
 #   [1] - int - count of pixels in byte (from 1 to 8)
@@ -408,27 +487,13 @@ function PNG_get_parts_sizes() {
 #
 # @ - int[7] - image header
 function PNG_get_pixel_size() {
-    local header=("$@")
-
-    if [[ ${header[2]} -lt 8 ]] ; then
-        echo 1 $((8 / ${header[2]})) ${header[2]}
+    if [[ $3 -lt 8 ]] ; then
+        echo 1 $((8 / $3)) $3
         return
     fi
 
-    local comps=1
-    case ${header[3]} in
-    2 )
-        comps=3
-        ;;
-    4 )
-        comps=2
-        ;;
-    6 )
-        comps=4
-        ;;
-    esac
-
-    echo $(((${header[2]} / 8) * $comps)) 1 ${header[2]}
+    local comps=$(PNG_get_pixel_components "$@")
+    echo $((($3 / 8) * $comps)) 1 $3
 }
 
 # PaethPredictor reconstruction function
@@ -514,37 +579,30 @@ function PNG_reconstruct_line() {
 # @:1:3 - int[3] - pixel size
 # @:4   - int[]  - line bytes
 function PNG_unserialize_line() {
+    local i
+    local j
+
     local input=("${@:4}")
 
-    local i
-    local byte
     local pixels=()
     if [[ $2 -eq 1 ]] ; then
         for ((i = 0; i < ${#input[@]}; i += $1)) ; do
-            local bytes=("${input[@]:$i:$1}")
-
-            local j
-            local buf=()
-            local pixel=()
-            for ((j = 0; j <= ${#bytes[@]}; ++j)) ; do
-                if [[ $j -ne 0 ]] && (($j % ($3 / 8) == 0)) ; then
-                    pixel=("${pixel[@]}" $(bytes2uint "${buf[@]}"))
-                    buf=()
-                fi
-
-                buf=("${buf[@]}" ${bytes[$j]})
-            done
-
-            pixel="${pixel[*]}"
-            pixels=("${pixels[@]}" "${pixel// /:}")
+            pixels=("${pixels[@]}" $(color_serialize $(PNG_bytes2color $3 "${input[@]:$i:$1}")))
         done
     else
         local mask=$((2 ** $3 - 1))
 
+        local buf
+        local byte
         for byte in "${input[@]}" ; do
+            buf=()
+
             for ((i = 0; i < $2; ++i)) ; do
-                pixels=("${pixels[@]}" $((($byte >> (8 - ($i + 1) * $3) & $mask))))
+                buf=($(color_serialize $(PNG_bytes2color $3 $(($byte & $mask)))) "${buf[@]}")
+                (( byte >>= $3 ))
             done
+
+            pixels=("${pixels[@]}" "${buf[@]}")
         done
     fi
 
@@ -602,7 +660,7 @@ input=("${input[@]:8}")
 #   - 0 - Width
 #   - 1 - Height
 #   - 2 - Bit depth
-#   - 3 - Colour type
+#   - 3 - Color type
 #   - 4 - Compression method
 #   - 5 - Filter method
 #   - 6 - Interlace method
@@ -612,7 +670,7 @@ header=()
 palette=()
 
 # Color that will be treated as transparent
-transparent=
+transparent=()
 
 # Background color
 array_contains 'background' "${options[@]}" || background=(0 0 0)
@@ -668,7 +726,7 @@ while true ; do
 
         array_contains 'quiet' "${options[@]}" || printf 'Image size: %dx%dpx
 Bit depth: %d
-Colour type: %d
+Color type: %d
 Compression method: %d
 Filter method: %d
 Interlace method: %d\n' "${header[@]}"
@@ -695,8 +753,7 @@ Interlace method: %d\n' "${header[@]}"
         fi
 
         for ((i = 2; i < ${#chunk[@]}; i += 3)) ; do
-            palette_color="${chunk[*]:$i:3}"
-            palette=("${palette[@]}" ${palette_color// /:})
+            palette=("${palette[@]}" $(color_serialize "${chunk[@]:$i:3}"))
         done
         ;;
     'IDAT' )
@@ -724,23 +781,8 @@ Interlace method: %d\n' "${header[@]}"
         fi
 
         case ${header[3]} in
-        2 )
-            transparent=$(($(bytes2uint ${chunk[@]:2}) / 255))
-            ;;
-        4 )
-            buf=()
-            transparent=()
-            for ((j = 0; j <= 6; ++j)) ; do
-                if [[ $j -ne 0 ]] && (($j % 2 == 0)) ; then
-                    transparent=("${pixel[@]}" $(($(bytes2uint "${buf[@]}") / 255)))
-                    buf=()
-                fi
-
-                buf=("${buf[@]}" ${chunk[$j + 2]})
-            done
-
-            transparent="${transparent[*]}"
-            transparent="${transparent// /:}"
+        2|4 )
+            transparent=($(PNG_bytes2color 16 ${chunk[@]:2}))
             ;;
         3 )
             if ! array_contains 'PLTE' "${chunks[@]}" ; then
@@ -748,14 +790,12 @@ Interlace method: %d\n' "${header[@]}"
                 kill $$
             fi
 
-            for ((i = 0; i + 2 < ${#chunk[@]}; ++i)); do
-                if [[ -z ${palette[$i]} ]] ; then
-                    echo 'tRNS chunk cannot contain more values than palette' >&2
-                    kill $$
-                fi
+            if (( ${chunk[0]} > ${#palette[@]} )) ; then
+                echo 'tRNS chunk cannot contain more values than palette' >&2
+                kill $$
+            fi
 
-                palette[$i]="${palette[$i]}:${chunk[$i + 2]}"
-            done
+            transparent=("${chunk[@]:2}")
             ;;
         esac
         ;;
@@ -766,21 +806,8 @@ Interlace method: %d\n' "${header[@]}"
         fi
 
         case ${header[3]} in
-        2 )
-            background=$(($(bytes2uint ${chunk[@]:2}) / 255))
-            background=($background $background $background)
-            ;;
-        4 )
-            buf=()
-            background=()
-            for ((j = 0; j <= 6; ++j)) ; do
-                if [[ $j -ne 0 ]] && (($j % 2 == 0)) ; then
-                    background=("${pixel[@]}" $(($(bytes2uint "${buf[@]}") / 255)))
-                    buf=()
-                fi
-
-                buf=("${buf[@]}" ${chunk[$j + 2]})
-            done
+        2|4 )
+            background=($(PNG_bytes2color 16 ${chunk[@]:2}))
             ;;
         3 )
             if ! array_contains 'PLTE' "${chunks[@]}" ; then
@@ -788,8 +815,7 @@ Interlace method: %d\n' "${header[@]}"
                 kill $$
             fi
 
-            background=(${palette[${chunk[2]}]//:/ })
-            background=("${background[@]:0:3}")
+            background=($(color_unserialize ${palette[${chunk[2]}]}))
             ;;
         esac
         ;;
@@ -838,43 +864,46 @@ for ((i = 0; i < $parts_count; ++i)) ; do
     prev_line=()
 
     for ((y = 0; y < ${parts[1]}; ++y)) ; do
-        filter_type=${data[0]}
-        data=("${data[@]:1}")
-
         # Reconstruct line
         length=$(((${parts[0]} * ${pixel_size[0]} + (${parts[0]} * ${pixel_size[0]}) % ${pixel_size[1]}) / ${pixel_size[1]}))
-        cur_line=($(PNG_reconstruct_line "${header[5]}" ${pixel_size[0]} $length "$filter_type" "${data[@]:0:$length}" "${prev_line[@]}"))
+        cur_line=($(PNG_reconstruct_line ${header[5]} ${pixel_size[0]} $length "${data[@]:0:$length + 1}" "${prev_line[@]}"))
         prev_line=("${cur_line[@]}")
 
         # Unserialize line
         line=($(PNG_unserialize_line "${pixel_size[@]}" "${cur_line[@]}"))
 
+        # Print line
         for ((x = 0; x < ${parts[0]}; ++x)) ; do
-            pixel="${line[$x]}"
-            pixel=(${pixel//:/ })
+            pixel=($(color_unserialize ${line[$x]}))
 
             # Resolve palette colors
             if [[ ${header[3]} -eq 3 ]] ; then
-                pixel=(${palette[${pixel[0]}]})
-                pixel=(${pixel//:/ })
+                pixel=($(color_unserialize ${palette[${pixel[0]}]}) ${transparent[${pixel[0]}]:-255})
             fi
 
             # Scale grayscale to RGB
-            if [[ ${#pixel[@]} -lt 3 ]] ; then
-                pixel=(${pixel[0]} ${pixel[0]} ${pixel[0]} ${pixel[1]:-255})
+            if [[ ${header[3]} -eq 0 ]] || [[ ${header[3]} -eq 4 ]] ; then
+                pixel=(${pixel[0]} ${pixel[0]} ${pixel[0]} ${pixel[1]:-$((2 ** ${header[2]} - 1))})
             fi
 
             # Add alpha component
-            if [[ ${#pixel[@]} -eq 3 ]] ; then
-                pixel=("${pixel[@]}" 255)
+            if [[ ${header[3]} -ne 3 ]] && [[ "${transparent[*]}" == "${pixel[*]}" ]] ; then
+                pixel=(0 0 0 0)
+            elif [[ ${#pixel[@]} -eq 3 ]] ; then
+                if [[ ${header[3]} -eq 3 ]] ; then
+                    pixel=("${pixel[@]}" 255)
+                else
+                    pixel=("${pixel[@]}" $((2 ** ${header[2]} - 1)))
+                fi
             fi
 
-            chr="$(color2ansi "${pixel[@]}" "${background[@]}")"
+            # Print
+            chr="$(color2ansi ${header[2]} $(apply_background "${pixel[@]}" "${background[@]}" ${header[2]}))"
             printf '%s%s' "$chr" "$chr"
         done
         echo
 
-        data=("${data[@]:$length}")
+        data=("${data[@]:$length + 1}")
     done
 
     parts=("${parts[@]:2}")

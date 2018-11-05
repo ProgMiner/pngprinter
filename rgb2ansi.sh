@@ -61,20 +61,6 @@ function find_nearest_color() {
     echo $nearest
 }
 
-# Moves up one element from array
-#
-# 1   - int   - element id
-# @:2 - int[] - array
-function array_move_up() {
-    local i
-
-    for ((i = 1; i <= $# - 1; ++i)) ; do
-        [[ $i -eq $1 ]] && continue
-
-        echo ${!i}
-    done
-}
-
 ## SRG
 
 # https://github.com/sindresorhus/xterm-colors/blob/master/xterm-colors.json
@@ -156,9 +142,6 @@ function SRG_rgb2palette() {
     echo "${4:0:1}${SGR_rgb2palette_Palette_codes[$(find_nearest_color "${@:1:3}" "${SGR_rgb2palette_Palette_values[@]}")]//;/ }"
 }
 
-SGR_fix_cache_A=()
-SGR_fix_cache_B=()
-SGR_fix_cache_size=12
 # Fixes RGB SRG to ANSI palette
 #
 # If ESC-sequence is not SRG or is not ESC-sequence returns w/o printing anything.
@@ -180,19 +163,6 @@ function SRG_fix() {
     input="${input[*]:2:${#input[@]} - 3}"
     input="${input// /}"
 
-    for ((i = 0; i < ${#SGR_fix_cache_A}; ++i)) ; do
-        [[ "${SGR_fix_cache_A[$i]}" != "$input" ]] && continue
-
-        printf '%s' "${SGR_fix_cache_B[$i]}"
-        [[ $i -eq 0 ]] && return
-
-        SGR_fix_cache_A=(array_move_up $i "${SRG_fix_cache_A[@]}")
-        SGR_fix_cache_B=(array_move_up $i "${SRG_fix_cache_B[@]}")
-        return
-    done
-
-    SGR_fix_cache_A=("$input" "${SGR_fix_cache_A[@]:0:$SGR_fix_cache_size - 1}")
-
     input=(${input//;/ })
 
     local result=()
@@ -208,8 +178,6 @@ function SRG_fix() {
 
     result="${result[*]}"
     printf '\x1B[%sm' "${result// /;}"
-
-    SGR_fix_cache_B=("$(printf '\x1B[%sm' "${result// /;}")" "${SGR_fix_cache_B[@]:0:$SGR_fix_cache_size - 1}")
 }
 
 # Entry point
