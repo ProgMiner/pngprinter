@@ -115,6 +115,14 @@ function abs() {
     echo ${1#-}
 }
 
+# Division with floor to greater value
+#
+# 1 - int - numerator
+# 2 - int - denominator
+function div_greater() {
+    echo $(($1 / $2 + ($1 % $2 > 0 ? 1 : 0)))
+}
+
 ### Arrays
 
 # Checks is array contains a value
@@ -435,6 +443,17 @@ function PNG_format_international_text() {
     esac
 }
 
+PNG_get_parts_sizes_Adam7=(
+    0 5 3 5 1 5 3 5
+    6 6 6 6 6 6 6 6
+    4 5 4 5 4 5 4 5
+    6 6 6 6 6 6 6 6
+    2 5 3 5 2 5 3 5
+    6 6 6 6 6 6 6 6
+    4 5 4 5 4 5 4 5
+    6 6 6 6 6 6 6 6
+)
+
 # Prints widths and heights of parts of image in following format:
 #   [0]  - parts count
 #   [1:] - parts sizes (2 numbers on part: width and height)
@@ -449,10 +468,14 @@ function PNG_get_parts_sizes() {
         ;;
     '1' )
         echo 7
-        # TODO
 
-        echo 'Interlace method 0 is not supported' >&2
-        kill $$
+        echo $(div_greater ${header[0]} 8) $(div_greater ${header[1]} 8)
+        echo $(div_greater $((${header[0]} - 4)) 8) $(div_greater ${header[1]} 8)
+        echo $(div_greater ${header[0]} 4) $(div_greater $((${header[1]} - 4)) 8)
+        echo $(div_greater $((${header[0]} - 2)) 4) $(div_greater ${header[1]} 4)
+        echo $(div_greater ${header[0]} 2) $(div_greater $((${header[1]} - 2)) 4)
+        echo $(div_greater $((${header[0]} - 1)) 2) $(div_greater ${header[1]} 2)
+        echo ${header[0]} $(div_greater $((${header[1]} - 1)) 2)
         ;;
     '*' )
         echo "Undefined interlace method ${header[6]}" >&2
@@ -855,6 +878,9 @@ array_contains 'quiet' "${options[@]}" || echo $'   Done!'
 
 pixel_size=($(PNG_get_pixel_size "${header[@]}"))
 
+bit_depth=${header[2]}
+[[ ${header[3]} == 3 ]] && bit_depth=8
+
 parts=($(PNG_get_parts_sizes "${header[@]}"))
 parts_count="${parts[0]}"
 parts=("${parts[@]:1}")
@@ -865,7 +891,7 @@ for ((i = 0; i < $parts_count; ++i)) ; do
 
     for ((y = 0; y < ${parts[1]}; ++y)) ; do
         # Reconstruct line
-        length=$(((${parts[0]} * ${pixel_size[0]} + (${parts[0]} * ${pixel_size[0]}) % ${pixel_size[1]}) / ${pixel_size[1]}))
+        length=$(div_greater $((${parts[0]} * ${pixel_size[0]})) ${pixel_size[1]})
         cur_line=($(PNG_reconstruct_line ${header[5]} ${pixel_size[0]} $length "${data[@]:0:$length + 1}" "${prev_line[@]}"))
         prev_line=("${cur_line[@]}")
 
@@ -883,7 +909,7 @@ for ((i = 0; i < $parts_count; ++i)) ; do
 
             # Scale grayscale to RGB
             if [[ ${header[3]} -eq 0 ]] || [[ ${header[3]} -eq 4 ]] ; then
-                pixel=(${pixel[0]} ${pixel[0]} ${pixel[0]} ${pixel[1]:-$((2 ** ${header[2]} - 1))})
+                pixel=(${pixel[0]} ${pixel[0]} ${pixel[0]} ${pixel[1]:-$((2 ** $bit_depth - 1))})
             fi
 
             # Add alpha component
@@ -893,12 +919,12 @@ for ((i = 0; i < $parts_count; ++i)) ; do
                 if [[ ${header[3]} -eq 3 ]] ; then
                     pixel=("${pixel[@]}" 255)
                 else
-                    pixel=("${pixel[@]}" $((2 ** ${header[2]} - 1)))
+                    pixel=("${pixel[@]}" $((2 ** $bit_depth - 1)))
                 fi
             fi
 
             # Print
-            chr="$(color2ansi ${header[2]} $(apply_background "${pixel[@]}" "${background[@]}" ${header[2]}))"
+            chr="$(color2ansi $bit_depth $(apply_background "${pixel[@]}" "${background[@]}" $bit_depth))"
             printf '%s%s' "$chr" "$chr"
         done
         echo
