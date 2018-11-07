@@ -643,7 +643,7 @@ for ((i = 1; i <= $#; ++i)) ; do
         options=("${options[@]}" 'verbose')
         ;;
     '-q'|'--quiet' )
-        options=("${options[@]}" 'quiet')
+        options=("${options[@]}" 'quiet' 'ignore tIME' 'ignore tEXt' 'ignore zTXt' 'ignore iTXt')
         ;;
     '-i'|'--ignore' )
         ((++i))
@@ -665,7 +665,7 @@ for ((i = 1; i <= $#; ++i)) ; do
         ((++i))
         background=("${background[@]}" "${!i}")
 
-        options=("${options[@]}" "background")
+        options=("${options[@]}" 'background' 'ignore bKGD')
         ;;
     esac
 done
@@ -859,7 +859,7 @@ Interlace method: %d\n' "${header[@]}"
         echo
         ;;
     'zTXt' )
-        PNG_compressed_text "${chunk[@]:2}"
+        PNG_format_compressed_text "${chunk[@]:2}"
         echo
         ;;
 
