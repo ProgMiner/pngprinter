@@ -101,7 +101,7 @@ BEGIN {
 }
 
 {
-    printf("%s ", hex2dec[$0])
+    printf("%s\n", hex2dec[$0])
 }
 '
 }
@@ -167,33 +167,45 @@ function find_nearest() {
 
 ### Color
 
-# Mixes color with background color
+# Mixes colors from stream with background color
 #
 # @link https://habr.com/post/98743/
 #
-# @:1:4 - int[4] - foreground color RGBA
-# @:5:3 - int[3] - background color RGB
-# 8     - int    - bit depth
+# @:1:3 - int[3] - background color RGB
+# 4     - int    - bit depth
 function apply_background() {
-    local max=$((2 ** $8 - 1))
+    local color
 
-    echo $(($5 + ($1 - $5) * $4 / $max))
-    echo $(($6 + ($2 - $6) * $4 / $max))
-    echo $(($7 + ($3 - $7) * $4 / $max))
+    local max=$((2 ** $4 - 1))
+
+    while read color ; do
+        color=($color)
+
+        printf '%d %d %d\n' \
+            $(($1 + (${color[0]} - $1) * ${color[3]} / $max)) \
+            $(($2 + (${color[1]} - $2) * ${color[3]} / $max)) \
+            $(($3 + (${color[2]} - $3) * ${color[3]} / $max))
+    done
 }
 
-# Converts color to ANSI ESC-sequence
+# Converts colors from stream to ANSI ESC-sequence
 #
-# 1     - int    - bit depth
-# @:2:3 - int[3] - RGB
+# 1 - int    - bit depth
+# 2 - string - pixel symbol
 function color2ansi() {
-    local color=(
-        $(($2 * 256 / (2 ** $1)))
-        $(($3 * 256 / (2 ** $1)))
-        $(($4 * 256 / (2 ** $1)))
-    )
+    local color
 
-    printf '\x1B[48;2;%d;%d;%dm \x1B[0m' "${color[@]}"
+    local denom=$((2 ** $1))
+
+    while read color ; do
+        color=($color)
+
+        printf '\x1B[48;2;%d;%d;%dm%s\x1B[0m' \
+            $((${color[0]} * 256 / $denom)) \
+            $((${color[1]} * 256 / $denom)) \
+            $((${color[2]} * 256 / $denom)) \
+            "$2"
+    done
 }
 
 # Serializes color array
@@ -541,95 +553,202 @@ function PNG_reconstruct_PaethPredictor() {
 
 # Reconstructs scanline from filtered
 #
-# 1        - int     - filter method
-# 2        - int     - pixel size in bytes
-# 3        - int     - line length in bytes
-# 4        - int     - line filter type
-# @:5:$3   - int[$3] - filtered line
-# @:$3 + 5 - int[]   - reconstructed previous line
-function PNG_reconstruct_line() {
-    local line=("${@:5:$3}")
-    local prev_line=("${@:$3 + 5}")
+# 1   - int   - filter method
+# 2   - int   - pixel size in bytes
+# @:3 - int[] - lines lengths in bytes
+function PNG_reconstruct() {
+    local filter_type
+    local cur_line
+    local cur_byte
+    local byte
+    local x
 
     if [[ $1 -ne 0 ]] ; then
         echo "Undefined filter method $1" >&2
         kill $$
     fi
 
-    local x
-    local cur_line=()
-    for ((x = 0; x < $3; ++x)) ; do
-        case "$4" in
-        0 )
-            cur_line=("${cur_line[@]}" ${line[$x]})
-            ;;
-        1 )
-            if [[ $x -lt $2 ]] ; then
-                cur_line=("${cur_line[@]}" ${line[$x]})
-            else
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + ${cur_line[$x - $2]}) % 256)))
-            fi
-            ;;
-        2 )
-            cur_line=("${cur_line[@]}" $(((${line[$x]} + ${prev_line[$x]:-0}) % 256)))
-            ;;
-        3 )
-            if [[ $x -lt $2 ]] ; then
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + ${prev_line[$x]:-0} / 2) % 256)))
-            else
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + (${cur_line[$x - $2]} + ${prev_line[$x]:-0}) / 2) % 256)))
-            fi
-            ;;
-        4 )
-            if [[ $x -lt $2 ]] ; then
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor 0 ${prev_line[$x]:-0} 0)) % 256)))
-            else
-                cur_line=("${cur_line[@]}" $(((${line[$x]} + $(PNG_reconstruct_PaethPredictor ${cur_line[$x - $2]} ${prev_line[$x]:-0} ${prev_line[$x - $2]:-0})) % 256)))
-            fi
-            ;;
-        * )
-            echo "Undefined filter type $4" >&2
-            kill $$
-            ;;
-        esac
-    done
+    local lengths=("${@:3}")
 
-    echo "${cur_line[@]}"
+    local y=0
+    local prev_line=()
+    while read byte ; do
+        filter_type=$byte
+
+        while [[ ${lengths[$i]} -eq 0 ]] ; do
+            ((++y))
+        done
+
+        cur_line=()
+        for ((x = 0; x < ${lengths[$y]}; ++x)) ; do
+            read byte || break
+
+            case "$filter_type" in
+            0 )
+                cur_byte=$byte
+                ;;
+            1 )
+                if [[ $x -lt $2 ]] ; then
+                    cur_byte=$byte
+                else
+                    cur_byte=$((($byte + ${cur_line[$x - $2]}) % 256))
+                fi
+                ;;
+            2 )
+                cur_byte=$((($byte + ${prev_line[$x]:-0}) % 256))
+                ;;
+            3 )
+                if [[ $x -lt $2 ]] ; then
+                    cur_byte=$((($byte + ${prev_line[$x]:-0} / 2) % 256))
+                else
+                    cur_byte=$((($byte + (${cur_line[$x - $2]} + ${prev_line[$x]:-0}) / 2) % 256))
+                fi
+                ;;
+            4 )
+                if [[ $x -lt $2 ]] ; then
+                    cur_byte=$((($byte + $(PNG_reconstruct_PaethPredictor 0 ${prev_line[$x]:-0} 0)) % 256))
+                else
+                    cur_byte=$((($byte + $(PNG_reconstruct_PaethPredictor ${cur_line[$x - $2]} ${prev_line[$x]:-0} ${prev_line[$x - $2]:-0})) % 256))
+                fi
+                ;;
+            * )
+                echo "Undefined filter type $4" >&2
+                kill $$
+                ;;
+            esac
+
+            echo $cur_byte
+            cur_line=(${cur_line[@]} $cur_byte)
+        done
+
+        prev_line=(${cur_line[@]})
+        ((++y))
+    done
 }
 
 # Splits bytes to pixels array
 #
 # @:1:3 - int[3] - pixel size
-# @:4   - int[]  - line bytes
-function PNG_unserialize_line() {
+# @:4   - int[]  - parts (widths and heights)
+function PNG_unserialize() {
+    local byte
     local i
-    local j
 
-    local input=("${@:4}")
+    local parts=(${@:4})
 
-    local pixels=()
     if [[ $2 -eq 1 ]] ; then
-        for ((i = 0; i < ${#input[@]}; i += $1)) ; do
-            pixels=("${pixels[@]}" $(color_serialize $(PNG_bytes2color $3 "${input[@]:$i:$1}")))
+        local buf=()
+
+        for ((i = 0; ; i = (i + 1) % $1)) ; do
+            read byte || break
+
+            buf=(${buf[@]} $byte)
+            if [[ $i -eq $(($1 - 1)) ]] ; then
+                PNG_bytes2color $3 ${buf[@]}
+                buf=()
+            fi
         done
     else
-        local mask=$((2 ** $3 - 1))
+        local tail=$((8 - $3))
 
-        local buf
-        local byte
-        for byte in "${input[@]}" ; do
-            buf=()
+        local x
+        local y
+        while [[ ${#parts[@]} -ne 0 ]] ; do
+            for ((y = 0; y < ${parts[1]}; ++y)) ; do
+                for ((x = 0; x < ${parts[0]}; )) ; do
+                    read byte || break 2
 
-            for ((i = 0; i < $2; ++i)) ; do
-                buf=($(color_serialize $(PNG_bytes2color $3 $(($byte & $mask)))) "${buf[@]}")
-                (( byte >>= $3 ))
+                    for ((i = 0; i < $2 && x < ${parts[0]}; ++i, ++x)) ; do
+                        echo $(($byte >> $tail))
+                        byte=$((($byte << $3) & 255))
+                    done
+                done
             done
 
-            pixels=("${pixels[@]}" "${buf[@]}")
+            parts=(${parts[@]:2})
         done
     fi
+}
 
-    echo "${pixels[@]}"
+# Converts pixels to RGB format
+#
+# 1        - int     - color type
+# 2        - int     - color bit depth
+# 3        - int     - palette size
+# @:4:$3   - int[$3] - palette
+# @:$3 + 4 - int[]   - tRNs content
+function PNG_normalize() {
+    local color
+
+    local transparent=(${@:$3 + 4})
+    local alpha=$((2 ** $2 - 1))
+
+    case $1 in
+    0 )
+        while read color ; do
+            if [[ $color -eq ${transparent[0]} ]] ; then
+                echo 0 0 0 0
+            else
+                echo $color $color $color $alpha
+            fi
+        done
+        ;;
+    2 )
+        while read color ; do
+            if [[ "${transparent[*]}" == "$color" ]] ; then
+                echo 0 0 0 0
+            else
+                echo $color $alpha
+            fi
+        done
+        ;;
+    3 )
+        local palette=(${@:4:$3})
+
+        while read color ; do
+            color_unserialize "${palette[$color]}:${transparent[$color]:-$alpha}"
+        done
+        ;;
+    4 )
+        while read color ; do
+            color=($color)
+
+            echo ${color[0]} ${color[0]} ${color[0]} ${color[1]}
+        done
+        ;;
+    6 )
+        while read color ; do
+            echo $color
+        done
+        ;;
+    esac
+}
+
+# Prints PNG image
+#
+# 1   - int    - color bit depth
+# 2   - string - pixel symbol
+# 3   - int    - parts count
+# @:4 - int[]  - parts (widths and heights)
+function PNG_print_image() {
+    local color
+    local i
+    local y
+    local x
+
+    local parts=(${@:4})
+
+    for ((i = 0; i < $3; ++i)) ; do
+        for ((y = 0; y < ${parts[$i * 2 + 1]}; ++y)) ; do
+            for ((x = 0; x < ${parts[$i * 2]}; ++x)) ; do
+                read color || break 3
+                echo $color
+            done |
+            color2ansi $1 "$2"
+
+            echo
+        done
+    done
 }
 
 # Entry point
@@ -804,7 +923,7 @@ Interlace method: %d\n' "${header[@]}"
         fi
 
         case ${header[3]} in
-        2|4 )
+        0|2 )
             transparent=($(PNG_bytes2color 16 ${chunk[@]:2}))
             ;;
         3 )
@@ -818,7 +937,7 @@ Interlace method: %d\n' "${header[@]}"
                 kill $$
             fi
 
-            transparent=("${chunk[@]:2}")
+            transparent=(${chunk[@]:2})
             ;;
         esac
         ;;
@@ -872,10 +991,6 @@ Interlace method: %d\n' "${header[@]}"
     chunks=("${chunks[@]}" "${chunk[1]}")
 done
 
-array_contains 'quiet' "${options[@]}" || printf 'Uncompressing...'
-data=($(PNG_uncompress "${header[4]}" "${data[@]}"))
-array_contains 'quiet' "${options[@]}" || echo $'   Done!'
-
 pixel_size=($(PNG_get_pixel_size "${header[@]}"))
 
 bit_depth=${header[2]}
@@ -885,52 +1000,16 @@ parts=($(PNG_get_parts_sizes "${header[@]}"))
 parts_count="${parts[0]}"
 parts=("${parts[@]:1}")
 
-cur_image=()
+lengths=()
 for ((i = 0; i < $parts_count; ++i)) ; do
-    prev_line=()
-
-    for ((y = 0; y < ${parts[1]}; ++y)) ; do
-        # Reconstruct line
-        length=$(div_greater $((${parts[0]} * ${pixel_size[0]})) ${pixel_size[1]})
-        cur_line=($(PNG_reconstruct_line ${header[5]} ${pixel_size[0]} $length "${data[@]:0:$length + 1}" "${prev_line[@]}"))
-        prev_line=("${cur_line[@]}")
-
-        # Unserialize line
-        line=($(PNG_unserialize_line "${pixel_size[@]}" "${cur_line[@]}"))
-
-        # Print line
-        for ((x = 0; x < ${parts[0]}; ++x)) ; do
-            pixel=($(color_unserialize ${line[$x]}))
-
-            # Resolve palette colors
-            if [[ ${header[3]} -eq 3 ]] ; then
-                pixel=($(color_unserialize ${palette[${pixel[0]}]}) ${transparent[${pixel[0]}]:-255})
-            fi
-
-            # Scale grayscale to RGB
-            if [[ ${header[3]} -eq 0 ]] || [[ ${header[3]} -eq 4 ]] ; then
-                pixel=(${pixel[0]} ${pixel[0]} ${pixel[0]} ${pixel[1]:-$((2 ** $bit_depth - 1))})
-            fi
-
-            # Add alpha component
-            if [[ ${header[3]} -ne 3 ]] && [[ "${transparent[*]}" == "${pixel[*]}" ]] ; then
-                pixel=(0 0 0 0)
-            elif [[ ${#pixel[@]} -eq 3 ]] ; then
-                if [[ ${header[3]} -eq 3 ]] ; then
-                    pixel=("${pixel[@]}" 255)
-                else
-                    pixel=("${pixel[@]}" $((2 ** $bit_depth - 1)))
-                fi
-            fi
-
-            # Print
-            chr="$(color2ansi $bit_depth $(apply_background "${pixel[@]}" "${background[@]}" $bit_depth))"
-            printf '%s%s' "$chr" "$chr"
-        done
-        echo
-
-        data=("${data[@]:$length + 1}")
+    for ((y = 0; y < ${parts[$i * 2 + 1]}; ++y)) ; do
+        lengths=(${lengths[@]} $(div_greater $((${parts[$i * 2]} * ${pixel_size[0]})) ${pixel_size[1]}))
     done
-
-    parts=("${parts[@]:2}")
 done
+
+PNG_uncompress ${header[4]} ${data[@]} |
+PNG_reconstruct ${header[5]} ${pixel_size[0]} ${lengths[@]} |
+PNG_unserialize ${pixel_size[@]} ${parts[@]} |
+PNG_normalize ${header[3]} $bit_depth ${#palette[@]} ${palette[@]} ${transparent[@]} |
+apply_background ${background[@]} $bit_depth |
+PNG_print_image $bit_depth '  ' $parts_count ${parts[@]}
