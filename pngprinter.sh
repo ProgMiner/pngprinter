@@ -786,6 +786,11 @@ for ((i = 1; i <= $#; ++i)) ; do
 
         options=("${options[@]}" 'background' 'ignore bKGD')
         ;;
+    '-p'|'--pixel' )
+        ((++i))
+        pixel_string="${!i}"
+
+        options=("${options[@]}" 'pixel')
     esac
 done
 
@@ -816,6 +821,9 @@ transparent=()
 
 # Background color
 array_contains 'background' "${options[@]}" || background=(0 0 0)
+
+# Pixel string
+array_contains 'pixel' "${options[@]}" || pixel_string='  '
 
 # Array of all IDAT chunks content
 data=()
@@ -1012,4 +1020,4 @@ PNG_reconstruct ${header[5]} ${pixel_size[0]} ${lengths[@]} |
 PNG_unserialize ${pixel_size[@]} ${parts[@]} |
 PNG_normalize ${header[3]} $bit_depth ${#palette[@]} ${palette[@]} ${transparent[@]} |
 apply_background ${background[@]} $bit_depth |
-PNG_print_image $bit_depth '  ' $parts_count ${parts[@]}
+PNG_print_image $bit_depth "$pixel_string" $parts_count ${parts[@]}
