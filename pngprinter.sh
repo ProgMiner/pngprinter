@@ -439,19 +439,21 @@ function PNG_format_international_text() {
 
     text=$(chr_array "${text[@]}" | cat -vt)
 
-    case "${#lang}${#trans_keyword}" in
-    '00' )
+    case "${#lang} ${#trans_keyword}" in
+    '0 0' )
         printf '%s: %s' "$keyword" "$text"
         ;;
-    '0*' )
+
+    '0 '* )
         printf '%s (%s): %s' "$keyword" "$trans_keyword" "$text"
         ;;
-    '*0' )
+
+    *' 0' )
         printf '%s (%s): %s' "$keyword" "$lang" "$text"
         ;;
-    '*' )
+
+    *' '* )
         printf '%s (%s - %s): %s' "$keyword" "$lang" "$trans_keyword" "$text"
-        ;;
     esac
 }
 
@@ -478,6 +480,7 @@ function PNG_get_parts_sizes() {
     '0' )
         echo 1 "${header[0]}" "${header[1]}"
         ;;
+
     '1' )
         echo 7
 
@@ -489,7 +492,8 @@ function PNG_get_parts_sizes() {
         echo $(div_greater $((${header[0]} - 1)) 2) $(div_greater ${header[1]} 2)
         echo ${header[0]} $(div_greater $((${header[1]} - 1)) 2)
         ;;
-    '*' )
+
+    * )
         echo "Undefined interlace method ${header[6]}" >&2
         kill $$
     esac
@@ -500,18 +504,20 @@ function PNG_get_parts_sizes() {
 # @ - int[7] - image header
 function PNG_get_pixel_components() {
     case "$4" in
-    0|3 )
+    '0'|'3' )
         echo 1
         ;;
-    4 )
+
+    '4' )
         echo 2
         ;;
-    2 )
+
+    '2' )
         echo 3
         ;;
-    6 )
+
+    '6' )
         echo 4
-        ;;
     esac
 }
 
@@ -584,37 +590,41 @@ function PNG_reconstruct() {
             read byte || break
 
             case "$filter_type" in
-            0 )
+            '0' )
                 cur_byte=$byte
                 ;;
-            1 )
+
+            '1' )
                 if [[ $x -lt $2 ]] ; then
                     cur_byte=$byte
                 else
                     cur_byte=$((($byte + ${cur_line[$x - $2]}) % 256))
                 fi
                 ;;
-            2 )
+
+            '2' )
                 cur_byte=$((($byte + ${prev_line[$x]:-0}) % 256))
                 ;;
-            3 )
+
+            '3' )
                 if [[ $x -lt $2 ]] ; then
                     cur_byte=$((($byte + ${prev_line[$x]:-0} / 2) % 256))
                 else
                     cur_byte=$((($byte + (${cur_line[$x - $2]} + ${prev_line[$x]:-0}) / 2) % 256))
                 fi
                 ;;
-            4 )
+
+            '4' )
                 if [[ $x -lt $2 ]] ; then
                     cur_byte=$((($byte + $(PNG_reconstruct_PaethPredictor 0 ${prev_line[$x]:-0} 0)) % 256))
                 else
                     cur_byte=$((($byte + $(PNG_reconstruct_PaethPredictor ${cur_line[$x - $2]} ${prev_line[$x]:-0} ${prev_line[$x - $2]:-0})) % 256))
                 fi
                 ;;
+
             * )
                 echo "Undefined filter type $4" >&2
                 kill $$
-                ;;
             esac
 
             echo $cur_byte
@@ -683,8 +693,8 @@ function PNG_normalize() {
     local transparent=(${@:$3 + 4})
     local alpha=$((2 ** $2 - 1))
 
-    case $1 in
-    0 )
+    case "$1" in
+    '0' )
         while read color ; do
             if [[ $color -eq ${transparent[0]} ]] ; then
                 echo 0 0 0 0
@@ -693,7 +703,8 @@ function PNG_normalize() {
             fi
         done
         ;;
-    2 )
+
+    '2' )
         while read color ; do
             if [[ "${transparent[*]}" == "$color" ]] ; then
                 echo 0 0 0 0
@@ -702,25 +713,27 @@ function PNG_normalize() {
             fi
         done
         ;;
-    3 )
+
+    '3' )
         local palette=(${@:4:$3})
 
         while read color ; do
             color_unserialize "${palette[$color]}:${transparent[$color]:-$alpha}"
         done
         ;;
-    4 )
+
+    '4' )
         while read color ; do
             color=($color)
 
             echo ${color[0]} ${color[0]} ${color[0]} ${color[1]}
         done
         ;;
-    6 )
+
+    '6' )
         while read color ; do
             echo $color
         done
-        ;;
     esac
 }
 
@@ -728,27 +741,34 @@ function PNG_normalize() {
 #
 # 1   - int    - color bit depth
 # 2   - string - pixel symbol
-# 3   - int    - parts count
-# @:4 - int[]  - parts (widths and heights)
+# 3   - int    - interlace method
+# 4   - int    - parts count
+# @:5 - int[]  - parts (widths and heights)
 function PNG_print_image() {
     local color
     local i
     local y
     local x
 
-    local parts=(${@:4})
+    local parts=(${@:5})
 
-    for ((i = 0; i < $3; ++i)) ; do
-        for ((y = 0; y < ${parts[$i * 2 + 1]}; ++y)) ; do
-            for ((x = 0; x < ${parts[$i * 2]}; ++x)) ; do
-                read color || break 3
-                echo $color
-            done |
-            color2ansi $1 "$2"
+    case "$3" in
+    '0' )
+        for ((i = 0; i < $4; ++i)) ; do
+            for ((y = 0; y < ${parts[$i * 2 + 1]}; ++y)) ; do
+                for ((x = 0; x < ${parts[$i * 2]}; ++x)) ; do
+                    read color || break 3
+                    echo $color
+                done |
+                color2ansi $1 "$2"
 
-            echo
+                echo
+            done
         done
-    done
+        ;;
+
+    '1' )
+    esac
 }
 
 # Entry point
@@ -761,9 +781,11 @@ for ((i = 1; i <= $#; ++i)) ; do
     '-v'|'--verbose' )
         options=("${options[@]}" 'verbose')
         ;;
+
     '-q'|'--quiet' )
         options=("${options[@]}" 'quiet' 'ignore tIME' 'ignore tEXt' 'ignore zTXt' 'ignore iTXt')
         ;;
+
     '-i'|'--ignore' )
         ((++i))
 
@@ -774,6 +796,7 @@ for ((i = 1; i <= $#; ++i)) ; do
 
         options=("${options[@]}" "ignore ${!i}")
         ;;
+
     '-b'|'--background' )
         ((++i))
         background=("${!i}")
@@ -786,6 +809,7 @@ for ((i = 1; i <= $#; ++i)) ; do
 
         options=("${options[@]}" 'background' 'ignore bKGD')
         ;;
+
     '-p'|'--pixel' )
         ((++i))
         pixel_string="${!i}"
@@ -881,6 +905,7 @@ Compression method: %d
 Filter method: %d
 Interlace method: %d\n' "${header[@]}"
         ;;
+
     'PLTE' )
         if array_contains 'PLTE' "${chunks[@]}" ; then
             echo 'PLTE chunks cannot be more than one' >&2
@@ -906,6 +931,7 @@ Interlace method: %d\n' "${header[@]}"
             palette=("${palette[@]}" $(color_serialize "${chunk[@]:$i:3}"))
         done
         ;;
+
     'IDAT' )
         if array_contains 'IDAT' "${chunks[@]}" && [[ "${chunks[@]:${#chunks[@]} - 1:1}" != 'IDAT' ]] ; then
             echo 'IDAT chunks must follow one by one' >&2
@@ -914,6 +940,7 @@ Interlace method: %d\n' "${header[@]}"
 
         data=("${data[@]}" "${chunk[@]:2}")
         ;;
+
     'IEND' )
         if [[ ${chunk[0]} -ne 0 ]] ; then
             echo 'Bad IEND chunk' >&2
@@ -930,11 +957,12 @@ Interlace method: %d\n' "${header[@]}"
             kill $$
         fi
 
-        case ${header[3]} in
-        0|2 )
+        case "${header[3]}" in
+        '0'|'2' )
             transparent=($(PNG_bytes2color 16 ${chunk[@]:2}))
             ;;
-        3 )
+
+        '3' )
             if ! array_contains 'PLTE' "${chunks[@]}" ; then
                 echo 'tRNS chunk cannot be before PLTE' >&2
                 kill $$
@@ -946,29 +974,30 @@ Interlace method: %d\n' "${header[@]}"
             fi
 
             transparent=(${chunk[@]:2})
-            ;;
         esac
         ;;
+
     'bKGD' )
         if array_contains 'bKGD' "${chunks[@]}" ; then
             echo 'bKGD chunk cannot be more than one' >&2
             kill $$
         fi
 
-        case ${header[3]} in
-        2|4 )
+        case "${header[3]}" in
+        '2'|'4' )
             background=($(PNG_bytes2color 16 ${chunk[@]:2}))
             ;;
-        3 )
+
+        '3' )
             if ! array_contains 'PLTE' "${chunks[@]}" ; then
                 echo 'bKGD chunk cannot be before PLTE' >&2
                 kill $$
             fi
 
             background=($(color_unserialize ${palette[${chunk[2]}]}))
-            ;;
         esac
         ;;
+
     'tIME' )
         if array_contains 'tIME' "${chunks[@]}" ; then
             echo 'tIME chunks cannot be more than one' >&2
@@ -977,14 +1006,17 @@ Interlace method: %d\n' "${header[@]}"
 
         echo 'Image last edit time:' "$(PNG_format_time ${chunk[@]:2})"
         ;;
+
     'iTXt' )
         PNG_format_international_text "${chunk[@]:2}"
         echo
         ;;
+
     'tEXt' )
         PNG_format_text "${chunk[@]:2}"
         echo
         ;;
+
     'zTXt' )
         PNG_format_compressed_text "${chunk[@]:2}"
         echo
@@ -993,7 +1025,6 @@ Interlace method: %d\n' "${header[@]}"
     # Ignored chunks
     '*' )
         echo "Chunk ${chunk[1]} ignored" >&2
-        ;;
     esac
 
     chunks=("${chunks[@]}" "${chunk[1]}")
@@ -1020,4 +1051,4 @@ PNG_reconstruct ${header[5]} ${pixel_size[0]} ${lengths[@]} |
 PNG_unserialize ${pixel_size[@]} ${parts[@]} |
 PNG_normalize ${header[3]} $bit_depth ${#palette[@]} ${palette[@]} ${transparent[@]} |
 apply_background ${background[@]} $bit_depth |
-PNG_print_image $bit_depth "$pixel_string" $parts_count ${parts[@]}
+PNG_print_image $bit_depth "$pixel_string" ${header[6]} $parts_count ${parts[@]}
