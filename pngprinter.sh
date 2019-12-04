@@ -737,6 +737,103 @@ function PNG_normalize() {
     esac
 }
 
+# Builds image from parts
+#
+# 1   - int   - interlace method
+# 2   - int   - parts count
+# @:3 - int[] - parts (widths and heights)
+function PNG_uninterlace() {
+    local from_buffer
+    local new_buffer
+    local buffer=()
+    local buffer_i
+
+    local parts=(${@:3})
+    case "$1" in
+    '0' )
+        while read color ; do
+            echo $color
+        done
+        ;;
+
+    '1' )
+        local width=${parts[0]}
+        local height=${parts[1]}
+
+        for ((i = 0; i < $2; ++i)) ; do
+            new_buffer=()
+            buffer_i=0
+
+            case "$i" in
+            '0' )
+                for ((y = 0; y < $height; ++y)) ; do
+                    for ((x = 0; x < $width; ++x)) ; do
+                        read color || break 3
+
+                        new_buffer=("${new_buffer[@]}" "$color")
+                        echo $color
+                    done
+                done
+                ;;
+
+            '1'|'3'|'5' )
+                ((width += ${parts[$i * 2]}))
+
+                for ((y = 0; y < $height; ++y)) ; do
+                    for ((x = 0; x < $width; ++x)) ; do
+                        from_buffer="${buffer[$((buffer_i++))]}"
+
+                        new_buffer=("${new_buffer[@]}" "$from_buffer")
+                        echo $from_buffer
+
+                        ((++x))
+                        if [[ $x -eq $width ]] ; then
+                            break
+                        fi
+
+                        read color || break 3
+
+                        new_buffer=("${new_buffer[@]}" "$color")
+                        echo $color
+                    done
+                done
+                ;;
+
+            '2'|'4'|'6' )
+                ((height += ${parts[$i * 2 + 1]}))
+
+                for ((y = 0; y < $height; ++y)) ; do
+                    for ((x = 0; x < $width; ++x)) ; do
+                        from_buffer="${buffer[$((buffer_i++))]}"
+
+                        new_buffer=("${new_buffer[@]}" "$from_buffer")
+                        echo $from_buffer
+                    done
+
+                    ((++y))
+                    if [[ $y -eq $height ]] ; then
+                        break
+                    fi
+
+                    for ((x = 0; x < $width; ++x)) ; do
+                        read color || break 3
+
+                        new_buffer=("${new_buffer[@]}" "$color")
+                        echo $color
+                    done
+                done
+            esac
+
+            buffer=("${new_buffer[@]}")
+        done
+        ;;
+
+    * )
+        echo "Undefined interlace method ${header[6]}" >&2
+        kill $$
+    esac
+}
+
 # Prints PNG image
 #
 # 1   - int    - color bit depth
@@ -751,7 +848,6 @@ function PNG_print_image() {
     local x
 
     local parts=(${@:5})
-
     case "$3" in
     '0' )
         for ((i = 0; i < $4; ++i)) ; do
@@ -768,6 +864,36 @@ function PNG_print_image() {
         ;;
 
     '1' )
+        local width=${parts[0]}
+        local height=${parts[1]}
+
+        for ((i = 0; i < $4; ++i)) ; do
+            case "$i" in
+            '1'|'3'|'5' )
+                ((width += ${parts[$i * 2]}))
+                ;;
+
+            '2'|'4'|'6' )
+                ((height += ${parts[$i * 2 + 1]}))
+            esac
+
+            echo Loading part $((i + 1))
+
+            for ((y = 0; y < $height; ++y)) ; do
+                for ((x = 0; x < $width; ++x)) ; do
+                    read color || break 3
+                    echo $color
+                done |
+                color2ansi $1 "$2"
+
+                echo
+            done
+        done
+        ;;
+
+    * )
+        echo "Undefined interlace method ${header[6]}" >&2
+        kill $$
     esac
 }
 
@@ -1051,4 +1177,5 @@ PNG_reconstruct ${header[5]} ${pixel_size[0]} ${lengths[@]} |
 PNG_unserialize ${pixel_size[@]} ${parts[@]} |
 PNG_normalize ${header[3]} $bit_depth ${#palette[@]} ${palette[@]} ${transparent[@]} |
 apply_background ${background[@]} $bit_depth |
+PNG_uninterlace ${header[6]} $parts_count ${parts[@]} |
 PNG_print_image $bit_depth "$pixel_string" ${header[6]} $parts_count ${parts[@]}
