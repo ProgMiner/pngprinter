@@ -130,12 +130,10 @@ function div_greater() {
 # 1   - string   - value
 # @:2 - string[] - array
 function array_contains() {
-    local input=("${@:2}")
-    local value="$1"
-
     local elem
-    for elem in "${input[@]}" ; do
-        [[ $value == $elem ]] && return 0
+
+    for elem in "${@:2}" ; do
+        [[ "$1" == "$elem" ]] && return 0
     done
 
     return 1
